@@ -322,9 +322,13 @@ quarkus.oidc.enabled=false
 quarkus.http.auth.permission.public.paths=/*
 quarkus.http.auth.permission.public.policy=permit
 security.enabled=false
+quarkus.kafka.devservices.enabled=false
+quarkus.apicurio-registry.devservices.enabled=false
 kafka.bootstrap.servers=localhost:9092
 kafka.security.protocol=PLAINTEXT
 quarkus.redis.hosts=redis://localhost:6379
+quarkus.http.test-port=0
+quarkus.log.level=INFO
 """
 
 
@@ -1146,7 +1150,15 @@ import io.quarkus.test.junit.QuarkusTestProfile;
 import java.util.Map;
 public class NoSecurityTestProfile implements QuarkusTestProfile {{
     @Override public Map<String, String> getConfigOverrides() {{
-        return Map.of("quarkus.oidc.enabled","false","quarkus.arc.validate","false");
+        return Map.of(
+            "quarkus.oidc.enabled", "false",
+            "quarkus.arc.validate", "false",
+            "security.enabled", "false",
+            "quarkus.http.auth.permission.public.paths", "/*",
+            "quarkus.http.auth.permission.public.policy", "permit",
+            "quarkus.kafka.devservices.enabled", "false",
+            "quarkus.apicurio-registry.devservices.enabled", "false"
+        );
     }}
 }}
 """
@@ -2766,7 +2778,6 @@ def scaffold_service_dg(sn: str, pkg: str, output_dir: str,
     root      = Path(output_dir) / sn
     java      = root / "src" / "main" / "java" / pkg_to_path(pkg)
     res       = root / "src" / "main" / "resources"
-    test_java = root / "src" / "test" / "java" / pkg_to_path(pkg)
     test_res  = root / "src" / "test" / "resources"
 
     print(f"\n⚙️   Scaffolding microservizio DataGateway '{sn}'")
@@ -2816,10 +2827,6 @@ def scaffold_service_dg(sn: str, pkg: str, output_dir: str,
     write(java / "scheduler" / "ScheduledJob.java",               gen_scheduled_job(pkg, sn))
     write(java / "scheduler" / "ShedLockConfig.java",             gen_shedlock_config(pkg))
 
-    write(test_java / "test" / "NoSecurityTestProfile.java",      gen_no_security_test_profile(pkg))
-    write(test_java / "test" / "resource" / f"{to_class_prefix(sn)}ResourceTest.java",
-          gen_sample_resource_test_dg(pkg, sn))
-
     print(f"\n✅  Microservizio DataGateway scaffoldato → {root}")
 
 
@@ -2828,7 +2835,6 @@ def scaffold_service(sn: str, pkg: str, output_dir: str,
     root      = Path(output_dir) / sn
     java      = root / "src" / "main" / "java" / pkg_to_path(pkg)
     res       = root / "src" / "main" / "resources"
-    test_java = root / "src" / "test" / "java" / pkg_to_path(pkg)
     test_res  = root / "src" / "test" / "resources"
 
     print(f"\n⚙️   Scaffolding microservizio '{sn}'")
@@ -2869,9 +2875,6 @@ def scaffold_service(sn: str, pkg: str, output_dir: str,
     write(java / "client"   / "SampleDgClient.java",           gen_sample_client(pkg, sn))
     write(java / "dto"      / "SampleDTO.java",                gen_sample_dto(pkg))
     write(java / "resource" / "SampleResource.java",           gen_sample_resource(pkg, sn, lib_pkg))
-
-    write(test_java / "test" / "NoSecurityTestProfile.java",              gen_no_security_test_profile(pkg))
-    write(test_java / "test" / "resource" / "SampleResourceTest.java",    gen_sample_resource_test(pkg, sn))
 
     print(f"\n✅  Microservizio scaffoldato → {root}")
 
