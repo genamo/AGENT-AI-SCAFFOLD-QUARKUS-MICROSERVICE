@@ -46,6 +46,8 @@ sua sottocartella). Il file `.github/copilot-instructions.md` viene caricato
 automaticamente da Copilot CLI quando si trova nella directory corrente o in
 una parent.
 
+CHIEDI A COPILOT: POSIZIONATI NELLA CARTELLA <PATH LOCALE DOVE AVETE SCARICATO IL REPOSITORY>/java
+
 ```bash
 cd java
 ```
