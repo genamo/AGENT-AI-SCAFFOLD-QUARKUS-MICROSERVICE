@@ -229,6 +229,7 @@ quarkus.redis.hosts=${{REDIS_HOSTS:redis://localhost:6379}}
 ############################################
 app.cache.redis.enabled=true
 app.cache.redis.prefix=cache
+cache.{short}.sample.ttl-seconds=${{CACHE_{short.upper()}_SAMPLE_TTL:300}}
 
 ############################################
 # KAFKA
@@ -564,6 +565,96 @@ public enum MessageTypeEnum {{
     MessageTypeEnum(String t, String c) {{ this.messageType = t; this.messageCode = c; }}
     public String getMessageType() {{ return messageType; }}
     public String getMessageCode() {{ return messageCode; }}
+}}
+"""
+
+
+
+def gen_cache_utils(pkg):
+    return f"""\
+package {pkg}.utils;
+
+import java.util.Objects;
+import java.util.function.Supplier;
+
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.logging.Logger;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import io.quarkus.redis.datasource.RedisDataSource;
+import io.quarkus.redis.datasource.value.ValueCommands;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+
+@ApplicationScoped
+public class CacheUtils {{
+
+    private static final Logger LOG = Logger.getLogger(CacheUtils.class);
+
+    private final ObjectMapper objectMapper;
+    private final ValueCommands<String, String> values;
+
+    @ConfigProperty(name = "app.cache.redis.prefix", defaultValue = "cache")
+    String prefix;
+
+    @Inject
+    public CacheUtils(RedisDataSource redisDS, ObjectMapper objectMapper) {{
+        this.objectMapper = objectMapper;
+        this.values = redisDS.value(String.class);
+    }}
+
+    public String key(String domain, String feature, String... parts) {{
+        StringBuilder sb = new StringBuilder(prefix)
+                .append(":").append(sanitize(domain))
+                .append(":").append(sanitize(feature));
+        if (parts != null) {{
+            for (String p : parts) {{
+                if (p != null && !p.isBlank()) sb.append(":").append(sanitize(p));
+            }}
+        }}
+        return sb.toString();
+    }}
+
+    private String sanitize(String s) {{
+        return s.trim().replace(" ", "_");
+    }}
+
+    public <T> T get(String key, TypeReference<T> typeRef) {{
+        Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(typeRef, "typeRef");
+        try {{
+            String json = values.get(key);
+            if (json == null || json.isBlank()) return null;
+            return objectMapper.readValue(json, typeRef);
+        }} catch (Exception e) {{
+            LOG.debugf("Cache GET fallita (key=%s): %s", key, e.toString());
+            return null;
+        }}
+    }}
+
+    public <T> void put(String key, T value, int ttlSeconds) {{
+        Objects.requireNonNull(key, "key");
+        if (ttlSeconds <= 0) {{
+            LOG.debugf("Cache PUT skipped (ttlSeconds<=0) key=%s", key);
+            return;
+        }}
+        try {{
+            String json = objectMapper.writeValueAsString(value);
+            values.setex(key, (long) ttlSeconds, json);
+        }} catch (Exception e) {{
+            LOG.debugf("Cache PUT fallita (key=%s): %s", key, e.toString());
+        }}
+    }}
+
+    public <T> T getOrCompute(String key, TypeReference<T> typeRef, int ttlSeconds, Supplier<T> supplier) {{
+        T cached = get(key, typeRef);
+        if (cached != null) return cached;
+        T computed = supplier.get();
+        put(key, computed, ttlSeconds);
+        return computed;
+    }}
 }}
 """
 
@@ -1028,10 +1119,12 @@ public interface SampleDgClient {{
 
 
 def gen_sample_service(pkg):
+    domain = pkg.split(".")[-1]
     return f"""\
 package {pkg}.service;
 
 import java.util.List; import java.util.Optional;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 import org.jboss.logging.Logger;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -1039,6 +1132,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import {pkg}.client.SampleDgClient;
 import {pkg}.dto.SampleDTO;
 import {pkg}.exception.RemoteCallException;
+import {pkg}.utils.CacheUtils;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.core.Response;
@@ -1048,13 +1142,25 @@ public class SampleService {{
     private static final Logger LOG = Logger.getLogger(SampleService.class);
     @Inject @RestClient SampleDgClient client;
     @Inject ObjectMapper objectMapper;
+    @Inject CacheUtils cacheUtils;
+
+    @ConfigProperty(name = "cache.{domain}.sample.ttl-seconds", defaultValue = "300")
+    int cacheGetAllTtlSeconds;
 
     public List<SampleDTO> getAll(String kl, String tid, boolean ma, String pt) {{
-        try (Response r = client.getAll(kl, tid, ma, pt)) {{
-            if (r.getStatus() == 204) return List.of();
-            if (r.getStatus() == 200) return readList(r.readEntity(String.class));
-            throw new RemoteCallException("Errore getAll Sample: HTTP " + r.getStatus());
-        }}
+        String cacheKey = cacheUtils.key("{domain}", "sample", "getall");
+        return cacheUtils.getOrCompute(
+            cacheKey,
+            new TypeReference<List<SampleDTO>>() {{}},
+            cacheGetAllTtlSeconds,
+            () -> {{
+                try (Response r = client.getAll(kl, tid, ma, pt)) {{
+                    if (r.getStatus() == 204) return List.of();
+                    if (r.getStatus() == 200) return readList(r.readEntity(String.class));
+                    throw new RemoteCallException("Errore getAll Sample: HTTP " + r.getStatus());
+                }}
+            }}
+        );
     }}
     public Optional<SampleDTO> getById(Long id, String kl, String tid, boolean ma, String pt) {{
         try (Response r = client.getById(id, kl, tid, ma, pt)) {{
@@ -2963,6 +3069,7 @@ def scaffold_service(sn: str, pkg: str, output_dir: str,
     write(java / "utils"    / "Utility.java",                  gen_utility(pkg))
     write(java / "utils"    / "JsonUtils.java",                gen_json_utils(pkg))
     write(java / "utils"    / "MessageTypeEnum.java",          gen_message_type_enum(pkg))
+    write(java / "utils"    / "CacheUtils.java",               gen_cache_utils(pkg))
 
     write(java / "exception"/ "RemoteCallException.java",      gen_remote_call_exception(pkg))
     write(java / "exception"/ "RetryableRemoteException.java", gen_retryable_remote_exception(pkg))
