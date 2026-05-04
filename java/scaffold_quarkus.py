@@ -2192,13 +2192,17 @@ public class DevKafkaTopicInitializer {{
         }}
         LOG.info("DEV profile detected -> Kafka topic auto-creation enabled");
 
-        List<String> topicsToEnsure = List.of(
-                topicService.getRealTopic(Topic.QUARKUS_TOPIC_1),
-                topicService.getRealTopic(Topic.QUARKUS_TOPIC_2)
-        ).stream()
-         .filter(t -> t != null && !t.isBlank())
-         .distinct()
-         .toList();
+        List<String> topicsToEnsure;
+        try {{
+            topicsToEnsure = Topic.getAllTopicsValue().stream()
+                    .filter(t -> t != null && !t.isBlank())
+                    .map(topicService::getRealTopic)
+                    .distinct()
+                    .toList();
+        }} catch (Exception e) {{
+            LOG.error("Error reading Kafka topic constants from Constants.Topic", e);
+            return;
+        }}
 
         if (topicsToEnsure.isEmpty()) {{
             LOG.warn("No DEV Kafka topics to ensure (topic list is empty)");
