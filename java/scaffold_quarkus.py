@@ -335,7 +335,7 @@ quarkus.log.level=INFO
 def gen_constants(pkg, sn):
     short = to_short(sn)
     topic_const = f"{short.upper()}_TOPIC"
-    topic_val   = f"pmr-{short}"
+    topic_val   = f"{short}"
     return f"""\
 package {pkg}.utils;
 
@@ -1364,7 +1364,7 @@ def gen_application_properties_dg(sn, pkg, lib_pkg):
 # QUARKUS CORE
 ############################################
 quarkus.application.name={sn}
-quarkus.http.root-path=${{kapp:prefix}}
+#quarkus.http.root-path=${{kapp:prefix}}
 quarkus.http.port=${{QUARKUS_PORT:8090}}
 quarkus.package.output-name={sn}
 
@@ -1452,7 +1452,7 @@ mp.messaging.incoming.sample-in.auto.offset.reset=earliest
 mp.messaging.incoming.sample-in.value.deserializer=org.apache.kafka.common.serialization.StringDeserializer
 mp.messaging.incoming.sample-in.enable.auto.commit=false
 mp.messaging.incoming.sample-in.max.poll.records=1
-mp.messaging.incoming.sample-in.topic=${{kafka-prefix.topics}}-pmr-{short}
+mp.messaging.incoming.sample-in.topic=${{kafka-prefix.topics}}-{short}-in
 
 ############################################
 # SECURITY - OIDC
@@ -1569,8 +1569,8 @@ public interface Constants {{
     }}
 
     interface Topic {{
-        String {topic_in_const}  = "pmr-{topic_in}";
-        String {topic_out_const} = "pmr-{topic_out}";
+        String {topic_in_const}  = "{topic_in}";
+        String {topic_out_const} = "{topic_out}";
 
         static List<String> getAllTopicsValue() throws IllegalArgumentException, IllegalAccessException {{
             List<Field> fields = Arrays.asList(Constants.Topic.class.getDeclaredFields());
