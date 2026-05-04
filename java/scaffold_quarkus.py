@@ -2139,6 +2139,112 @@ public class KafkaGenericConsumer {{
 """
 
 
+def gen_dev_kafka_topic_initializer(pkg):
+    return f"""\
+package {pkg}.kafka;
+
+import java.util.List;
+import java.util.Properties;
+import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+
+import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.admin.CreateTopicsResult;
+import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.common.errors.TopicExistsException;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.logging.Logger;
+
+import {pkg}.service.TopicService;
+import {pkg}.utils.Constants.Topic;
+
+import io.quarkus.runtime.StartupEvent;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.event.Observes;
+import jakarta.inject.Inject;
+
+@ApplicationScoped
+public class DevKafkaTopicInitializer {{
+
+    private static final Logger LOG = Logger.getLogger(DevKafkaTopicInitializer.class);
+    private static final long ADMIN_TIMEOUT_SECONDS = 10;
+
+    @Inject
+    TopicService topicService;
+
+    @ConfigProperty(name = "kafka.bootstrap.servers")
+    String bootstrapServers;
+
+    @ConfigProperty(name = "kafka.topics.auto-create", defaultValue = "false")
+    boolean autoCreateTopics;
+
+    @ConfigProperty(name = "kafka.topics.partitions", defaultValue = "1")
+    int partitions;
+
+    @ConfigProperty(name = "kafka.topics.replication-factor", defaultValue = "1")
+    short replicationFactor;
+
+    void onStart(@Observes StartupEvent event) {{
+        if (!autoCreateTopics) {{
+            LOG.debug("Kafka DEV topic auto-creation disabled");
+            return;
+        }}
+        LOG.info("DEV profile detected -> Kafka topic auto-creation enabled");
+
+        List<String> topicsToEnsure = List.of(
+                topicService.getRealTopic(Topic.QUARKUS_TOPIC_1),
+                topicService.getRealTopic(Topic.QUARKUS_TOPIC_2)
+        ).stream()
+         .filter(t -> t != null && !t.isBlank())
+         .distinct()
+         .toList();
+
+        if (topicsToEnsure.isEmpty()) {{
+            LOG.warn("No DEV Kafka topics to ensure (topic list is empty)");
+            return;
+        }}
+
+        Properties props = new Properties();
+        props.put("bootstrap.servers", bootstrapServers);
+
+        try (AdminClient admin = AdminClient.create(props)) {{
+            Set<String> existingTopics = admin.listTopics().names()
+                    .get(ADMIN_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
+            List<NewTopic> topicsToCreate = topicsToEnsure.stream()
+                    .filter(t -> !existingTopics.contains(t))
+                    .map(t -> new NewTopic(t, partitions, replicationFactor))
+                    .toList();
+
+            if (topicsToCreate.isEmpty()) {{
+                LOG.info("All DEV Kafka topics already exist");
+                return;
+            }}
+
+            CreateTopicsResult result = admin.createTopics(topicsToCreate);
+            for (NewTopic nt : topicsToCreate) {{
+                try {{
+                    result.values().get(nt.name()).get(ADMIN_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                    LOG.infof("Kafka DEV topic created: %s (partitions=%d, rf=%d)",
+                            nt.name(), partitions, replicationFactor);
+                }} catch (ExecutionException ee) {{
+                    Throwable cause = ee.getCause();
+                    if (cause instanceof TopicExistsException) {{
+                        LOG.infof("Kafka DEV topic already exists (race ignored): %s", nt.name());
+                    }} else {{
+                        LOG.errorf(cause, "Error creating Kafka DEV topic: %s", nt.name());
+                    }}
+                }}
+            }}
+        }} catch (Exception e) {{
+            LOG.error("Error while creating Kafka topics in DEV", e);
+        }}
+    }}
+}}
+"""
+
+
 def gen_scheduled_job(pkg, sn):
     short = to_short(sn)
     return f"""\
@@ -2813,6 +2919,7 @@ def scaffold_service_dg(sn: str, pkg: str, output_dir: str,
 
     write(java / "kafka"     / "KafkaGenericProducer.java",       gen_kafka_producer(pkg))
     write(java / "kafka"     / "KafkaGenericConsumer.java",       gen_kafka_consumer_dg(pkg, sn))
+    write(java / "kafka"     / "DevKafkaTopicInitializer.java",   gen_dev_kafka_topic_initializer(pkg))
 
     write(java / "service"   / "TopicService.java",               gen_topic_service(pkg))
     write(java / "service"   / f"{to_class_prefix(sn)}Service.java", gen_sample_service_dg(pkg, sn))
@@ -2869,6 +2976,7 @@ def scaffold_service(sn: str, pkg: str, output_dir: str,
 
     write(java / "kafka"    / "KafkaGenericProducer.java",     gen_kafka_producer(pkg))
     write(java / "kafka"    / "KafkaGenericConsumer.java",     gen_kafka_consumer(pkg))
+    write(java / "kafka"    / "DevKafkaTopicInitializer.java", gen_dev_kafka_topic_initializer(pkg))
 
     write(java / "service"  / "TopicService.java",             gen_topic_service(pkg))
     write(java / "service"  / "SampleService.java",            gen_sample_service(pkg))
