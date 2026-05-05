@@ -424,9 +424,14 @@ import java.util.UUID;
 
 import {pkg}.exception.RemoteCallException;
 import {pkg}.response.GenericResponse;
+import {pkg}.response.GenericResponse.Message;
 import jakarta.ws.rs.core.Response;
 
 public class Utility {{
+
+    // =========================
+    // Helpers
+    // =========================
 
     public static String defaultUuidIfBlank(String v) {{
         return (v == null || v.isBlank()) ? UUID.randomUUID().toString() : v;
@@ -439,6 +444,10 @@ public class Utility {{
         return (v == null || v.trim().isEmpty()) ? def : v;
     }}
 
+    // =========================
+    // Common headers
+    // =========================
+
     public static Response.ResponseBuilder withCommonHeaders(Response.ResponseBuilder rb,
             String kl, String tid, boolean modAsync, String pt) {{
         return rb.header(Constants.Headers.KEYLOGIC, kl)
@@ -446,6 +455,10 @@ public class Utility {{
                  .header(Constants.Headers.MOD_ASYNC, String.valueOf(modAsync))
                  .header(Constants.Headers.PROCESS_TYPE, pt);
     }}
+
+    // =========================
+    // Internal builders
+    // =========================
 
     private static <T> GenericResponse<T> baseGeneric(String path) {{
         GenericResponse<T> gr = new GenericResponse<>();
@@ -457,8 +470,17 @@ public class Utility {{
         return Duration.ofNanos(System.nanoTime() - s).toMillis() + "ms";
     }}
 
+    // =========================
+    // Success responses
+    // =========================
+
     public static <T> Response ok(T data, String path, String kl, String tid, boolean ma, String pt, long s) {{
         GenericResponse<T> gr = baseGeneric(path); gr.setData(data); gr.setExecutionTime(fmtNanos(s));
+        if (data instanceof List<?> l) gr.setNumberOfElements(l.size());
+        return withCommonHeaders(Response.ok(gr), kl, tid, ma, pt).build();
+    }}
+    public static <T> Response okWithMessageCustom(T data, Message msg, String path, String kl, String tid, boolean ma, String pt, long s) {{
+        GenericResponse<T> gr = baseGeneric(path); gr.setData(data); gr.setExecutionTime(fmtNanos(s)); gr.setMessage(msg);
         if (data instanceof List<?> l) gr.setNumberOfElements(l.size());
         return withCommonHeaders(Response.ok(gr), kl, tid, ma, pt).build();
     }}
@@ -466,38 +488,67 @@ public class Utility {{
         GenericResponse<T> gr = baseGeneric(path); gr.setExecutionTime(fmtNanos(s)); gr.setNumberOfElements(0);
         return withCommonHeaders(Response.ok(gr), kl, tid, ma, pt).build();
     }}
-    public static <T> Response notFound(String msg, String path, String kl, String tid, boolean ma, String pt, long s) {{
-        GenericResponse<T> gr = baseGeneric(path); gr.setExecutionTime(fmtNanos(s));
-        GenericResponse.Message m = new GenericResponse.Message();
-        m.setMessageType("ERROR"); m.setMessageCode("NOT_FOUND"); m.setMessageDescription(msg); gr.setMessage(m);
-        return withCommonHeaders(Response.status(Response.Status.NOT_FOUND).entity(gr), kl, tid, ma, pt).build();
-    }}
-    public static <T> Response badRequest(String msg, String path, String kl, String tid, boolean ma, String pt, long s) {{
-        GenericResponse<T> gr = baseGeneric(path); gr.setExecutionTime(fmtNanos(s));
-        GenericResponse.Message m = new GenericResponse.Message();
-        m.setMessageType("ERROR"); m.setMessageCode("BAD_REQUEST"); m.setMessageDescription(msg); gr.setMessage(m);
-        return withCommonHeaders(Response.status(Response.Status.BAD_REQUEST).entity(gr), kl, tid, ma, pt).build();
-    }}
-    public static <T> Response badGateway(RemoteCallException e, String path, String kl, String tid, boolean ma, String pt, long s) {{
-        GenericResponse<T> gr = baseGeneric(path); gr.setExecutionTime(fmtNanos(s));
-        GenericResponse.Message m = new GenericResponse.Message();
-        m.setMessageType("ERROR"); m.setMessageCode("BAD_GATEWAY"); m.setMessageDescription(e.getMessage()); gr.setMessage(m);
-        return withCommonHeaders(Response.status(Response.Status.BAD_GATEWAY).entity(gr), kl, tid, ma, pt).build();
-    }}
-    public static <T> Response okOrNotFound(Optional<T> opt, String notFoundMsg, String path,
-            String kl, String tid, boolean ma, String pt, long s) {{
-        if (opt == null || opt.isEmpty()) return notFound(notFoundMsg, path, kl, tid, ma, pt, s);
-        return ok(opt.get(), path, kl, tid, ma, pt, s);
-    }}
-    public static <T> Response okOrEmpty(List<T> list, String path, String kl, String tid, boolean ma, String pt, long s) {{
-        if (list == null || list.isEmpty()) return okEmpty(path, kl, tid, ma, pt, s);
-        return ok(list, path, kl, tid, ma, pt, s);
-    }}
     public static <T> Response created(T data, String path, String kl, String tid, boolean ma, String pt, long s) {{
         GenericResponse<T> gr = baseGeneric(path); gr.setData(data); gr.setExecutionTime(fmtNanos(s));
         if (data instanceof List<?> l) gr.setNumberOfElements(l.size());
         return withCommonHeaders(Response.status(Response.Status.CREATED).entity(gr), kl, tid, ma, pt).build();
     }}
+    public static Response noContentOnlyHeaders(String kl, String tid, boolean ma, String pt) {{
+        return withCommonHeaders(Response.noContent(), kl, tid, ma, pt).build();
+    }}
+
+    // =========================
+    // Error responses
+    // =========================
+
+    public static <T> Response notFound(String msg, String path, String kl, String tid, boolean ma, String pt, long s) {{
+        GenericResponse<T> gr = baseGeneric(path); gr.setExecutionTime(fmtNanos(s));
+        Message m = new Message(); m.setMessageType("ERROR"); m.setMessageCode("NOT_FOUND"); m.setMessageDescription(msg); gr.setMessage(m);
+        return withCommonHeaders(Response.status(Response.Status.NOT_FOUND).entity(gr), kl, tid, ma, pt).build();
+    }}
+    public static <T> Response notFoundWithMessageCustom(Message message, String path, String kl, String tid, boolean ma, String pt, long s) {{
+        GenericResponse<T> gr = baseGeneric(path); gr.setExecutionTime(fmtNanos(s)); gr.setMessage(message);
+        return withCommonHeaders(Response.status(Response.Status.NOT_FOUND).entity(gr), kl, tid, ma, pt).build();
+    }}
+    public static <T> Response badRequest(String msg, String path, String kl, String tid, boolean ma, String pt, long s) {{
+        GenericResponse<T> gr = baseGeneric(path); gr.setExecutionTime(fmtNanos(s));
+        Message m = new Message(); m.setMessageType("ERROR"); m.setMessageCode("BAD_REQUEST"); m.setMessageDescription(msg); gr.setMessage(m);
+        return withCommonHeaders(Response.status(Response.Status.BAD_REQUEST).entity(gr), kl, tid, ma, pt).build();
+    }}
+    public static <T> Response badGateway(RemoteCallException e, String path, String kl, String tid, boolean ma, String pt, long s) {{
+        GenericResponse<T> gr = baseGeneric(path); gr.setExecutionTime(fmtNanos(s));
+        Message m = new Message(); m.setMessageType("ERROR"); m.setMessageCode("BAD_GATEWAY"); m.setMessageDescription(e.getMessage()); gr.setMessage(m);
+        return withCommonHeaders(Response.status(Response.Status.BAD_GATEWAY).entity(gr), kl, tid, ma, pt).build();
+    }}
+
+    // =========================
+    // Helper: Optional & List
+    // =========================
+
+    public static <T> Response okOrNotFound(Optional<T> opt, String notFoundMsg, String path,
+            String kl, String tid, boolean ma, String pt, long s) {{
+        if (opt == null || opt.isEmpty()) return notFound(notFoundMsg, path, kl, tid, ma, pt, s);
+        return ok(opt.get(), path, kl, tid, ma, pt, s);
+    }}
+    public static <T> Response okOrNotFoundWithCustomMessage(Optional<T> opt, String path,
+            String kl, String tid, boolean ma, String pt, long s, Message customMessage) {{
+        if (opt == null || opt.isEmpty()) return notFoundWithMessageCustom(customMessage, path, kl, tid, ma, pt, s);
+        return okWithMessageCustom(opt.get(), customMessage, path, kl, tid, ma, pt, s);
+    }}
+    public static <T> Response okOrEmpty(List<T> list, String path, String kl, String tid, boolean ma, String pt, long s) {{
+        if (list == null || list.isEmpty()) return okEmpty(path, kl, tid, ma, pt, s);
+        return ok(list, path, kl, tid, ma, pt, s);
+    }}
+    public static <T> Response okOrEmptyWithCustoMessage(List<T> list, String path,
+            String kl, String tid, boolean ma, String pt, long s, Message customMessage) {{
+        if (list == null || list.isEmpty()) return okEmpty(path, kl, tid, ma, pt, s);
+        return okWithMessageCustom(list, customMessage, path, kl, tid, ma, pt, s);
+    }}
+
+    // =========================
+    // Logging helpers
+    // =========================
+
     public static long elapsedMs(long s) {{ return (System.nanoTime() - s) / 1_000_000; }}
     public static String safe(Object v) {{
         if (v == null) return "null";
@@ -738,6 +789,35 @@ public class GenericResponse<T> implements Serializable {{
         private List<String> messagePlaceholder;
         public Message(String t, String c, List<String> ph) {{ this.messageType=t; this.messageCode=c; this.messagePlaceholder=ph; }}
     }}
+}}
+"""
+
+
+def gen_custom_response(pkg):
+    return f"""\
+package {pkg}.response;
+
+import java.io.Serializable;
+
+import org.eclipse.microprofile.openapi.annotations.media.Schema;
+
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonInclude.Include;
+
+import {pkg}.response.GenericResponse.Message;
+import lombok.Data;
+
+@Data
+@Schema(name = "CustomResponse", description = "Response Wrapper with Custom Message")
+@JsonInclude(Include.NON_EMPTY)
+public class CustomResponse<T> implements Serializable {{
+
+    private static final long serialVersionUID = 5007805106893745317L;
+
+    private T responseData;
+    @JsonInclude(Include.NON_NULL)
+    private Message message;
+
 }}
 """
 
@@ -1123,15 +1203,19 @@ def gen_sample_service(pkg):
     return f"""\
 package {pkg}.service;
 
-import java.util.List; import java.util.Optional;
+import java.util.List;
+import java.util.Optional;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 import org.jboss.logging.Logger;
+import org.jboss.resteasy.reactive.ClientWebApplicationException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import {pkg}.client.SampleDgClient;
 import {pkg}.dto.SampleDTO;
 import {pkg}.exception.RemoteCallException;
+import {pkg}.response.CustomResponse;
+import {pkg}.response.GenericResponse.Message;
 import {pkg}.utils.CacheUtils;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -1162,19 +1246,40 @@ public class SampleService {{
             }}
         );
     }}
-    public Optional<SampleDTO> getById(Long id, String kl, String tid, boolean ma, String pt) {{
+
+    public CustomResponse<Optional<SampleDTO>> getById(Long id, String kl, String tid, boolean ma, String pt) {{
         try (Response r = client.getById(id, kl, tid, ma, pt)) {{
-            if (r.getStatus() == 404) return Optional.empty();
-            if (r.getStatus() == 200) return Optional.ofNullable(r.readEntity(SampleDTO.class));
-            throw new RemoteCallException("Errore getById Sample: HTTP " + r.getStatus());
+            int status = r.getStatus();
+            if (status == 200) {{
+                SampleDTO dto = r.readEntity(SampleDTO.class);
+                CustomResponse<Optional<SampleDTO>> cr = new CustomResponse<>();
+                cr.setResponseData(Optional.ofNullable(dto));
+                return cr;
+            }}
+            String errorBody = r.hasEntity() ? r.readEntity(String.class) : "";
+            throw new RemoteCallException("Errore getById Sample: HTTP " + status + " - " + errorBody);
+        }} catch (ClientWebApplicationException e) {{
+            if (e.getResponse() != null && e.getResponse().getStatus() == 404) {{
+                CustomResponse<Optional<SampleDTO>> cr = new CustomResponse<>();
+                cr.setResponseData(Optional.empty());
+                Message msg = new Message();
+                msg.setMessageType("NOT_FOUND");
+                msg.setMessageCode("INFO01");
+                msg.setMessageDescription("Nessun elemento trovato per id=" + id);
+                cr.setMessage(msg);
+                return cr;
+            }}
+            throw e;
         }}
     }}
+
     public SampleDTO save(SampleDTO dto, String kl, String tid, boolean ma, String pt) {{
         try (Response r = client.save(dto, kl, tid, ma, pt)) {{
             if (r.getStatus() == 200 || r.getStatus() == 201) return r.readEntity(SampleDTO.class);
             throw new RemoteCallException("Errore save Sample: HTTP " + r.getStatus());
         }}
     }}
+
     private List<SampleDTO> readList(String json) {{
         if (json == null || json.isBlank()) return List.of();
         try {{ return objectMapper.readValue(json, new TypeReference<List<SampleDTO>>() {{}}); }}
@@ -1189,11 +1294,13 @@ def gen_sample_resource(pkg, sn, lib_pkg):
     return f"""\
 package {pkg}.resource;
 
-import java.util.List; import java.util.Optional;
+import java.util.List;
+import java.util.Optional;
 import org.jboss.logging.Logger;
 import io.smallrye.common.annotation.Blocking;
 import {pkg}.dto.SampleDTO;
 import {pkg}.exception.RemoteCallException;
+import {pkg}.response.CustomResponse;
 import {pkg}.service.SampleService;
 import {pkg}.utils.RequestCtx;
 import {pkg}.utils.Utility;
@@ -1232,7 +1339,13 @@ public class SampleResource {{
         long s=System.nanoTime(); String kl=RequestCtx.kl(ctx),tid=RequestCtx.tid(ctx); boolean ma=RequestCtx.modAsync(ctx); String pt=RequestCtx.processType(ctx);
         final String path="/{prefix}_sample_getbyid";
         if (id==null) return Utility.badRequest("id obbligatorio",path,kl,tid,ma,pt,s);
-        try {{ Optional<SampleDTO> opt=service.getById(id,kl,tid,ma,pt); return Utility.okOrNotFound(opt,"id="+id+" non trovato",path,kl,tid,ma,pt,s); }}
+        try {{
+            CustomResponse<Optional<SampleDTO>> cr = service.getById(id,kl,tid,ma,pt);
+            return Utility.okOrNotFoundWithCustomMessage(
+                cr.getResponseData(),
+                path, kl, tid, ma, pt, s, cr.getMessage()
+            );
+        }}
         catch (IllegalArgumentException e) {{ return Utility.badRequest(e.getMessage(),path,kl,tid,ma,pt,s); }}
         catch (RemoteCallException e)      {{ return Utility.badGateway(e,path,kl,tid,ma,pt,s); }}
     }}
@@ -3076,6 +3189,7 @@ def scaffold_service(sn: str, pkg: str, output_dir: str,
 
     write(java / "response" / "GenericResponse.java",          gen_generic_response(pkg))
     write(java / "response" / "ResponseStatus.java",           gen_response_status(pkg))
+    write(java / "response" / "CustomResponse.java",           gen_custom_response(pkg))
 
     write(java / "filter"   / "MdcHeadersFilter.java",         gen_mdc_filter(pkg))
     write(java / "filter"   / "GlobalHeadersOpenApiFilter.java",gen_global_openapi_filter(pkg))
