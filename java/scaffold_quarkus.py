@@ -2708,6 +2708,19 @@ def gen_lib_application_properties():
 authorization-client/mp-rest/url=${AUTHZ_URL:http://localhost:8090/authorization}
 authorization-client/mp-rest/connectTimeout=2000
 authorization-client/mp-rest/readTimeout=3000
+
+############################################
+# B2B TOKEN (HMAC-SHA256)
+# Segreto condiviso tra tutti i microservizi
+# che usano la libreria (min 32 char).
+# In produzione impostare B2B_SECRET come env var.
+############################################
+# Segreto per firmare il token B2B
+security.b2b.secret=${B2B_SECRET:a3f8c2d91e4b7065f2a8c3d4e5f6071829a3b4c5d6e7f8091a2b3c4d5e6f7a8}
+# Durata validità token in secondi (default 5 minuti)
+security.b2b.token-ttl-seconds=${B2B_TOKEN_TTL:300}
+# Abilita/disabilita il filtro di sicurezza (false per ambienti di test)
+security.enabled=${SECURITY_ENABLED:true}
 """
 
 
@@ -3065,6 +3078,171 @@ public final class JwtRolesResolver {{
 # SCAFFOLD FUNCTIONS
 # ═════════════════════════════════════════════════════════════════════════════
 
+def gen_lib_b2b_token_utils(lib_pkg):
+    return f"""\
+package {lib_pkg}.util;
+
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.Base64;
+
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.logging.Logger;
+
+import jakarta.enterprise.context.ApplicationScoped;
+
+/**
+ * Utility per generare e validare token B2B firmati con HMAC-SHA256.
+ *
+ * Formato token (Base64url):
+ *   &lt;timestamp_epoch_seconds&gt;.&lt;signature_hmac_sha256&gt;
+ *
+ * Utilizzo lato client:
+ *   String token = b2bTokenUtils.generateSuperUserToken();
+ *   // → passa "Bearer &lt;token&gt;" nell'header Authorization della chiamata REST
+ */
+@ApplicationScoped
+public class B2BTokenUtils {{
+
+    private static final Logger LOG = Logger.getLogger(B2BTokenUtils.class);
+    private static final String HMAC_ALGO = "HmacSHA256";
+
+    @ConfigProperty(name = "security.b2b.secret")
+    String secret;
+
+    @ConfigProperty(name = "security.b2b.token-ttl-seconds", defaultValue = "300")
+    long ttlSeconds;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // GENERA
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** Genera un token B2B valido per {{@code ttlSeconds}} secondi. */
+    public String generateToken() {{
+        long expiresAt = Instant.now().getEpochSecond() + ttlSeconds;
+        String payload = String.valueOf(expiresAt);
+        String signature = sign(payload);
+        String token = Base64.getUrlEncoder().withoutPadding()
+                .encodeToString((payload + "." + signature).getBytes(StandardCharsets.UTF_8));
+        LOG.infof("Token B2B generato, scade alle epoch=%d (+%ds)", expiresAt, ttlSeconds);
+        return token;
+    }}
+
+    /** Restituisce il valore completo dell'header Authorization: "Bearer &lt;token&gt;" */
+    public String generateSuperUserToken() {{
+        return "Bearer " + generateToken();
+    }}
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // VALIDA
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /** Valida un token B2B ricevuto. @return true se valido e non scaduto */
+    public boolean isValid(String token) {{
+        try {{
+            String decoded = new String(
+                    Base64.getUrlDecoder().decode(token), StandardCharsets.UTF_8);
+            String[] parts = decoded.split("\\\\.", 2);
+            if (parts.length != 2) return false;
+
+            long expiresAt = Long.parseLong(parts[0]);
+            if (Instant.now().getEpochSecond() > expiresAt) {{
+                LOG.warnf("Token B2B scaduto alle epoch=%d", expiresAt);
+                return false;
+            }}
+            return constantTimeEquals(sign(parts[0]), parts[1]);
+        }} catch (Exception e) {{
+            LOG.warnf("Token B2B non valido: %s", e.getMessage());
+            return false;
+        }}
+    }}
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // PRIVATI
+    // ─────────────────────────────────────────────────────────────────────────
+
+    private String sign(String payload) {{
+        try {{
+            Mac mac = Mac.getInstance(HMAC_ALGO);
+            mac.init(new SecretKeySpec(
+                    secret.getBytes(StandardCharsets.UTF_8), HMAC_ALGO));
+            byte[] raw = mac.doFinal(payload.getBytes(StandardCharsets.UTF_8));
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(raw);
+        }} catch (Exception e) {{
+            throw new IllegalStateException("Errore firma token B2B", e);
+        }}
+    }}
+
+    /** Confronto in tempo costante per prevenire timing attack */
+    private boolean constantTimeEquals(String a, String b) {{
+        if (a.length() != b.length()) return false;
+        int result = 0;
+        for (int i = 0; i < a.length(); i++) result |= a.charAt(i) ^ b.charAt(i);
+        return result == 0;
+    }}
+}}
+"""
+
+
+def gen_lib_b2b_token_filter(lib_pkg):
+    return f"""\
+package {lib_pkg}.filter;
+
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.logging.Logger;
+
+import {lib_pkg}.util.B2BTokenUtils;
+import jakarta.annotation.Priority;
+import jakarta.inject.Inject;
+import jakarta.ws.rs.Priorities;
+import jakarta.ws.rs.container.ContainerRequestContext;
+import jakarta.ws.rs.container.ContainerRequestFilter;
+import jakarta.ws.rs.ext.Provider;
+
+/**
+ * Filtro JAX-RS che riconosce i token B2B firmati con HMAC-SHA256.
+ *
+ * Se il token nell'header Authorization è un B2B valido, imposta la proprietà
+ * {{@code b2b.super_user = true}} nel contesto della richiesta: i filtri
+ * AuthzReadFilter / AuthzWriteFilter possono usarla per fare bypass
+ * dell'autorizzazione OIDC standard.
+ *
+ * Attivo solo quando {{@code security.enabled=true}} (default).
+ */
+@Provider
+@Priority(Priorities.AUTHENTICATION - 10)
+public class B2BTokenFilter implements ContainerRequestFilter {{
+
+    private static final Logger LOG = Logger.getLogger(B2BTokenFilter.class);
+    public static final String B2B_SUPER_USER_KEY = "b2b.super_user";
+
+    @Inject
+    B2BTokenUtils b2bTokenUtils;
+
+    @ConfigProperty(name = "security.enabled", defaultValue = "true")
+    boolean securityEnabled;
+
+    @Override
+    public void filter(ContainerRequestContext req) {{
+        if (!securityEnabled) return;
+
+        String authHeader = req.getHeaderString("Authorization");
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) return;
+
+        String incomingToken = authHeader.substring("Bearer ".length()).trim();
+
+        if (b2bTokenUtils.isValid(incomingToken)) {{
+            LOG.info("B2B SUPER_USER riconosciuto — bypass autorizzazione");
+            req.setProperty(B2B_SUPER_USER_KEY, Boolean.TRUE);
+        }}
+    }}
+}}
+"""
+
+
 def scaffold_library(lib_name: str, lib_pkg: str, output_dir: str) -> None:
     lib_group = parent_pkg(lib_pkg)
     root      = Path(output_dir) / lib_name
@@ -3092,6 +3270,8 @@ def scaffold_library(lib_name: str, lib_pkg: str, output_dir: str) -> None:
     write(java / "service"      / "AuthzService.java",      gen_lib_authz_service(lib_pkg))
     write(java / "filter"       / "AuthzReadFilter.java",   gen_lib_authz_read_filter(lib_pkg))
     write(java / "filter"       / "AuthzWriteFilter.java",  gen_lib_authz_write_filter(lib_pkg))
+    write(java / "filter"       / "B2BTokenFilter.java",    gen_lib_b2b_token_filter(lib_pkg))
+    write(java / "util"         / "B2BTokenUtils.java",     gen_lib_b2b_token_utils(lib_pkg))
     write(java / "interceptor"  / "LogPmrInterceptor.java", gen_lib_log_pmr_interceptor(lib_pkg))
     write(java / "resolver"     / "MinimalContextResolver.java", gen_lib_minimal_context_resolver(lib_pkg))
     write(java / "resolver"     / "JwtUserIdResolver.java", gen_lib_jwt_user_id_resolver(lib_pkg))
