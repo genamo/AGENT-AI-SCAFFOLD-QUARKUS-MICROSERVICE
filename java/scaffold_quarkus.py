@@ -2852,21 +2852,72 @@ import jakarta.annotation.Priority;
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
 import jakarta.ws.rs.Priorities;
-import jakarta.ws.rs.container.*;
+import jakarta.ws.rs.container.ContainerRequestContext;
+import jakarta.ws.rs.container.ContainerRequestFilter;
+import jakarta.ws.rs.container.ResourceInfo;
 import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.ext.Provider;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.logging.Logger;
 
-@Provider @AuthzRead @Singleton @Priority(Priorities.AUTHORIZATION)
+@Provider
+@AuthzRead
+@Singleton
+@Priority(Priorities.AUTHORIZATION)
 public class AuthzReadFilter implements ContainerRequestFilter {{
-    @Context ResourceInfo resourceInfo;
-    @Inject AuthzService authzService;
-    @ConfigProperty(name = "security.enabled", defaultValue = "true") boolean securityEnabled;
+
+    private static final Logger LOG = Logger.getLogger(AuthzReadFilter.class);
+
+    @Context
+    ResourceInfo resourceInfo;
+
+    @Inject
+    AuthzService authzService;
+
+    @ConfigProperty(name = "security.enabled", defaultValue = "true")
+    boolean securityEnabled;
 
     @Override
     public void filter(ContainerRequestContext req) {{
-        if (!securityEnabled) return;
-        String context = MinimalContextResolver.build(resourceInfo.getResourceClass(), resourceInfo.getResourceMethod());
+
+        LOG.infof("AuthzReadFilter HIT — method=%s path=%s auth=%s",
+                req.getMethod(),
+                req.getUriInfo().getRequestUri(),
+                req.getHeaderString("Authorization") != null ? "PRESENT" : "MISSING");
+
+        if (!securityEnabled) {{
+            LOG.debug("Security disabled -> skip AuthzReadFilter");
+            return;
+        }}
+
+        if (resourceInfo == null || resourceInfo.getResourceMethod() == null) {{
+            LOG.warn("ResourceInfo not available -> skip AuthzReadFilter");
+            return;
+        }}
+
+        boolean enabledForMethod = resourceInfo.getResourceMethod()
+                .isAnnotationPresent(AuthzRead.class);
+
+        if (!enabledForMethod) {{
+            return;
+        }}
+
+        String context = MinimalContextResolver.build(
+                resourceInfo.getResourceClass(),
+                resourceInfo.getResourceMethod()
+        );
+
+        if (context == null || context.isBlank()) {{
+            LOG.warn("Context blank -> skip AuthzReadFilter");
+            return;
+        }}
+
+        LOG.debugf("AuthzReadFilter invoked -> %s#%s context=%s",
+                resourceInfo.getResourceClass().getSimpleName(),
+                resourceInfo.getResourceMethod().getName(),
+                context
+        );
+
         authzService.assertAuthorized(context, AuthzService.Permit.READ);
     }}
 }}
@@ -2884,21 +2935,67 @@ import jakarta.annotation.Priority;
 import jakarta.inject.Inject;
 import jakarta.inject.Singleton;
 import jakarta.ws.rs.Priorities;
-import jakarta.ws.rs.container.*;
+import jakarta.ws.rs.container.ContainerRequestContext;
+import jakarta.ws.rs.container.ContainerRequestFilter;
+import jakarta.ws.rs.container.ResourceInfo;
 import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.ext.Provider;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.logging.Logger;
 
-@Provider @AuthzWrite @Singleton @Priority(Priorities.AUTHORIZATION)
+@Provider
+@AuthzWrite
+@Singleton
+@Priority(Priorities.AUTHORIZATION)
 public class AuthzWriteFilter implements ContainerRequestFilter {{
-    @Context ResourceInfo resourceInfo;
-    @Inject AuthzService authzService;
-    @ConfigProperty(name = "security.enabled", defaultValue = "true") boolean securityEnabled;
+
+    private static final Logger LOG = Logger.getLogger(AuthzWriteFilter.class);
+
+    @Context
+    ResourceInfo resourceInfo;
+
+    @Inject
+    AuthzService authzService;
+
+    @ConfigProperty(name = "security.enabled", defaultValue = "true")
+    boolean securityEnabled;
 
     @Override
     public void filter(ContainerRequestContext req) {{
-        if (!securityEnabled) return;
-        String context = MinimalContextResolver.build(resourceInfo.getResourceClass(), resourceInfo.getResourceMethod());
+
+        if (!securityEnabled) {{
+            LOG.debug("Security disabled -> skip AuthzWriteFilter");
+            return;
+        }}
+
+        if (resourceInfo == null || resourceInfo.getResourceMethod() == null) {{
+            LOG.warn("ResourceInfo not available -> skip AuthzWriteFilter");
+            return;
+        }}
+
+        boolean enabledForMethod = resourceInfo.getResourceMethod()
+                .isAnnotationPresent(AuthzWrite.class);
+
+        if (!enabledForMethod) {{
+            return;
+        }}
+
+        String context = MinimalContextResolver.build(
+                resourceInfo.getResourceClass(),
+                resourceInfo.getResourceMethod()
+        );
+
+        if (context == null || context.isBlank()) {{
+            LOG.warn("Context blank -> skip AuthzWriteFilter");
+            return;
+        }}
+
+        LOG.debugf("AuthzWriteFilter invoked -> %s#%s context=%s",
+                resourceInfo.getResourceClass().getSimpleName(),
+                resourceInfo.getResourceMethod().getName(),
+                context
+        );
+
         authzService.assertAuthorized(context, AuthzService.Permit.WRITE);
     }}
 }}
@@ -2983,20 +3080,52 @@ def gen_lib_jwt_user_id_resolver(lib_pkg):
     return f"""\
 package {lib_pkg}.resolver;
 
-import org.eclipse.microprofile.jwt.JsonWebToken;
+import com.auth0.jwt.JWT;
+import com.auth0.jwt.interfaces.DecodedJWT;
+import java.util.List;
 
 public final class JwtUserIdResolver {{
+
     private JwtUserIdResolver() {{}}
-    public static String resolve(JsonWebToken jwt) {{
-        String userId = jwt.getClaim("userID");
-        if (notBlank(userId)) return userId;
-        String pu = jwt.getClaim("preferred_username");
-        if (notBlank(pu)) return pu;
-        String sub = jwt.getSubject();
-        if (notBlank(sub)) return sub;
-        return jwt.getName();
+
+    public static String resolve(String bearer) {{
+
+        if (bearer == null || bearer.isBlank()) {{
+            return null;
+        }}
+
+        DecodedJWT jwt = decode(bearer);
+
+        if (notBlank(jwt.getSubject())) {{
+            return jwt.getSubject();
+        }}
+
+        for (String claim : List.of("userId", "user_id", "preferred_username", "username")) {{
+            String value = jwt.getClaim(claim).asString();
+            if (notBlank(value)) {{
+                return value;
+            }}
+        }}
+
+        String name = jwt.getClaim("name").asString();
+        if (notBlank(name)) {{
+            return name;
+        }}
+
+        return null;
     }}
-    private static boolean notBlank(String s) {{ return s != null && !s.trim().isEmpty(); }}
+
+    private static DecodedJWT decode(String bearer) {{
+        return JWT.decode(stripBearer(bearer));
+    }}
+
+    private static String stripBearer(String bearer) {{
+        return bearer.startsWith("Bearer ") ? bearer.substring(7) : bearer;
+    }}
+
+    private static boolean notBlank(String s) {{
+        return s != null && !s.trim().isEmpty();
+    }}
 }}
 """
 
@@ -3005,21 +3134,42 @@ def gen_lib_jwt_roles_resolver(lib_pkg):
     return f"""\
 package {lib_pkg}.resolver;
 
-import java.util.*; import org.eclipse.microprofile.jwt.JsonWebToken;
+import com.auth0.jwt.JWT;
+import com.auth0.jwt.interfaces.DecodedJWT;
+import java.util.*;
 
 public final class JwtRolesResolver {{
+
     private JwtRolesResolver() {{}}
-    public static Set<String> resolveAllRoles(JsonWebToken jwt) {{
-        Set<String> out = new LinkedHashSet<>();
-        Object ra = jwt.getClaim("realm_access");
-        if (ra instanceof Map<?,?> m) addRoles(out, m.get("roles"));
-        Object rsa = jwt.getClaim("resource_access");
-        if (rsa instanceof Map<?,?> m) for (Object cv : m.values())
-            if (cv instanceof Map<?,?> cm) addRoles(out, cm.get("roles"));
-        return out;
+
+    public static Set<String> resolveAllRoles(String bearer) {{
+
+        if (bearer == null || bearer.isBlank()) {{
+            return Collections.emptySet();
+        }}
+
+        DecodedJWT jwt = decode(bearer);
+        Set<String> roles = new HashSet<>();
+
+        List<String> rolesList = jwt.getClaim("roles").asList(String.class);
+        if (rolesList != null) {{
+            roles.addAll(rolesList);
+        }}
+
+        String role = jwt.getClaim("role").asString();
+        if (role != null && !role.isBlank()) {{
+            roles.add(role);
+        }}
+
+        return roles;
     }}
-    private static void addRoles(Set<String> out, Object rolesObj) {{
-        if (rolesObj instanceof Collection<?> roles) for (Object r : roles) if (r != null) out.add(String.valueOf(r));
+
+    private static DecodedJWT decode(String bearer) {{
+        return JWT.decode(stripBearer(bearer));
+    }}
+
+    private static String stripBearer(String bearer) {{
+        return bearer.startsWith("Bearer ") ? bearer.substring(7) : bearer;
     }}
 }}
 """
@@ -3069,8 +3219,7 @@ public final class AuthorizationUtils {{
     // USER ID
     // =========================================================
     public static String resolveUserId(DecodedJWT jwt) {{
-        if (notBlank(jwt.getSubject())) return jwt.getSubject();
-        for (String claim : List.of("userId", "user_id", "preferred_username", "username")) {{
+        for (String claim : List.of("userID", "user_id", "preferred_username", "username")) {{
             String value = jwt.getClaim(claim).asString();
             if (notBlank(value)) return value;
         }}
@@ -3749,7 +3898,7 @@ public class B2BTokenFilter implements ContainerRequestFilter {{
 
         String incomingToken = authHeader.substring("Bearer ".length()).trim();
 
-        if (b2bTokenUtils.isValid(incomingToken)) {{
+        if (b2bTokenUtils.isValid(authHeader)) {{
             LOG.info("B2B SUPER_USER riconosciuto — bypass autorizzazione");
             req.setProperty(B2B_SUPER_USER_KEY, Boolean.TRUE);
         }}
