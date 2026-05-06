@@ -132,7 +132,6 @@ def gen_pom(sn, pkg, lib_group, lib_artifact):
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-jackson</artifactId></dependency>
         <!-- SECURITY -->
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-oidc</artifactId></dependency>
-        <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-smallrye-jwt</artifactId></dependency>
         <!-- OBSERVABILITY -->
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-smallrye-health</artifactId></dependency>
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-micrometer-registry-prometheus</artifactId></dependency>
@@ -270,9 +269,18 @@ mp.messaging.outgoing.kafka-out.retries=3
 #mp.messaging.incoming.kafka-in.topic=${{kafka-prefix.topics}}-pmr-{short}
 
 ############################################
+# SECURITY - HTTP policy
+############################################
+# Tutte le path pubbliche: la security applicativa è gestita da AuthzReadFilter/AuthzWriteFilter.
+quarkus.http.auth.permission.public.paths=/*
+quarkus.http.auth.permission.public.policy=permit
+
+############################################
 # SECURITY - OIDC
 ############################################
-quarkus.oidc.auth-server-url=${{OIDC_AUTH_SERVER_URL:http://localhost:8080/realms/myrealm}}
+# OIDC disabilitato: la validazione JWT è delegata all'authorization service esterno.
+quarkus.oidc.enabled=false
+quarkus.oidc.auth-server-url=${{OIDC_AUTH_SERVER_URL:https://sso.example.com/auth/realms/PMR}}
 quarkus.oidc.client-id=${{OIDC_CLIENT_ID:quarkus-client}}
 quarkus.oidc.credentials.secret=${{OIDC_SECRET:mysecret}}
 
@@ -307,10 +315,8 @@ mp.openapi.filter={pkg}.filter.GlobalHeadersOpenApiFilter
 ############################################
 # DEV PROFILE
 ############################################
-%dev.quarkus.oidc.enabled=false
-%dev.quarkus.http.auth.permission.public.paths=/*
-%dev.quarkus.http.auth.permission.public.policy=permit
-%dev.security.enabled=false
+%dev.security.enabled=true
+%dev.security.authz.bypass=true
 %dev.kafka.bootstrap.servers=localhost:${{KAFKA_SERVER_PORT:9092}}
 %dev.kafka.security.protocol=PLAINTEXT
 %dev.kafka.topics.auto-create=true
@@ -1065,7 +1071,6 @@ import java.util.Map;
 import java.util.UUID;
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.header.internals.RecordHeaders;
-import org.eclipse.microprofile.jwt.JsonWebToken;
 import org.eclipse.microprofile.reactive.messaging.Channel;
 import org.eclipse.microprofile.reactive.messaging.Emitter;
 import org.eclipse.microprofile.reactive.messaging.Message;
@@ -1074,12 +1079,10 @@ import io.smallrye.reactive.messaging.kafka.api.OutgoingKafkaRecordMetadata;
 import {pkg}.service.TopicService;
 import {pkg}.utils.JsonUtils;
 import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 
 @ApplicationScoped
 public class KafkaGenericProducer {{
-    @Inject Instance<JsonWebToken> jwt;
     @Inject TopicService topicService;
     @Inject @Channel("kafka-out") Emitter<String> emitter;
     private static final Logger LOG = Logger.getLogger(KafkaGenericProducer.class);
@@ -1516,7 +1519,6 @@ def gen_pom_dg(sn, pkg, lib_group, lib_artifact):
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-cache</artifactId></dependency>
         <!-- SECURITY -->
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-oidc</artifactId></dependency>
-        <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-smallrye-jwt</artifactId></dependency>
         <!-- OBSERVABILITY -->
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-smallrye-health</artifactId></dependency>
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-micrometer-registry-prometheus</artifactId></dependency>
@@ -1674,9 +1676,18 @@ mp.messaging.incoming.sample-in.max.poll.records=1
 mp.messaging.incoming.sample-in.topic=${{kafka-prefix.topics}}-{short}-in
 
 ############################################
+# SECURITY - HTTP policy
+############################################
+# Tutte le path pubbliche: la security applicativa è gestita da AuthzReadFilter/AuthzWriteFilter.
+quarkus.http.auth.permission.public.paths=/*
+quarkus.http.auth.permission.public.policy=permit
+
+############################################
 # SECURITY - OIDC
 ############################################
-quarkus.oidc.auth-server-url=${{OIDC_AUTH_SERVER_URL:http://localhost:8080/realms/myrealm}}
+# OIDC disabilitato: la validazione JWT è delegata all'authorization service esterno.
+quarkus.oidc.enabled=false
+quarkus.oidc.auth-server-url=${{OIDC_AUTH_SERVER_URL:https://sso.example.com/auth/realms/PMR}}
 quarkus.oidc.client-id=${{OIDC_CLIENT_ID:quarkus-client}}
 quarkus.oidc.credentials.secret=${{OIDC_SECRET:mysecret}}
 
@@ -1711,10 +1722,8 @@ cron.clean.sample=0 0 5 * * ?
 # DEV PROFILE
 ############################################
 %dev.quarkus.hibernate-orm.enabled=true
-%dev.quarkus.oidc.enabled=false
-%dev.quarkus.http.auth.permission.public.paths=/*
-%dev.quarkus.http.auth.permission.public.policy=permit
-%dev.security.enabled=false
+%dev.security.enabled=true
+%dev.security.authz.bypass=true
 %dev.kafka.bootstrap.servers=localhost:${{KAFKA_SERVER_PORT:9092}}
 %dev.kafka.security.protocol=PLAINTEXT
 %dev.kafka.topics.auto-create=true
@@ -2026,7 +2035,6 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
-import org.eclipse.microprofile.jwt.JsonWebToken;
 import org.jboss.logging.Logger;
 
 import {pkg}.domain.{cls}Entity;
@@ -2035,7 +2043,6 @@ import {pkg}.mapper.{cls}Mapper;
 import {pkg}.repository.{cls}Repository;
 import {pkg}.utils.JsonUtils;
 import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 
@@ -2049,9 +2056,6 @@ public class {cls}Service {{
 
     @Inject
     {cls}Mapper mapper;
-
-    @Inject
-    Instance<JsonWebToken> jwt;
 
     public List<{cls}DTO> getAll() {{
         return mapper.toDtoList(repository.findAllActive());
@@ -2108,12 +2112,6 @@ public class {cls}Service {{
     }}
 
     protected String currentUser() {{
-        try {{
-            if (!jwt.isUnsatisfied() && !jwt.isAmbiguous()) {{
-                JsonWebToken token = jwt.get();
-                return token != null ? token.getName() : "system";
-            }}
-        }} catch (Exception ignored) {{}}
         return "system";
     }}
 }}
@@ -2683,7 +2681,6 @@ def gen_lib_pom(lib_name, lib_group, lib_pkg):
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-rest</artifactId><scope>provided</scope></dependency>
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-rest-client-jackson</artifactId><scope>provided</scope></dependency>
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-oidc</artifactId><scope>provided</scope></dependency>
-        <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-smallrye-jwt</artifactId><scope>provided</scope></dependency>
     </dependencies>
 
     <build>
@@ -2721,6 +2718,8 @@ security.b2b.secret=${B2B_SECRET:a3f8c2d91e4b7065f2a8c3d4e5f6071829a3b4c5d6e7f80
 security.b2b.token-ttl-seconds=${B2B_TOKEN_TTL:300}
 # Abilita/disabilita il filtro di sicurezza (false per ambienti di test)
 security.enabled=${SECURITY_ENABLED:true}
+# Bypass authorization check per dev/test (default: false)
+security.authz.bypass=${SECURITY_AUTHZ_BYPASS:false}
 """
 
 
@@ -2839,39 +2838,63 @@ def gen_lib_authz_service(lib_pkg):
     return f"""\
 package {lib_pkg}.service;
 
-import io.quarkus.security.identity.SecurityIdentity;
-import io.quarkus.security.credential.TokenCredential;
+import com.auth0.jwt.interfaces.DecodedJWT;
 import {lib_pkg}.client.AuthorizationClient;
+import {lib_pkg}.filter.B2BTokenFilter;
 import {lib_pkg}.request.AuthzRequest;
-import {lib_pkg}.resolver.JwtRolesResolver;
-import {lib_pkg}.resolver.JwtUserIdResolver;
 import {lib_pkg}.response.AuthzResponse;
+import {lib_pkg}.util.AuthorizationUtils;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.ForbiddenException;
 import jakarta.ws.rs.NotAuthorizedException;
 import jakarta.ws.rs.ServiceUnavailableException;
-import org.eclipse.microprofile.jwt.JsonWebToken;
+import jakarta.ws.rs.container.ContainerRequestContext;
+import jakarta.ws.rs.core.Context;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
+import org.jboss.logging.Logger;
 import java.util.Set;
 
 @ApplicationScoped
 public class AuthzService {{
 
+    private static final Logger LOG = Logger.getLogger(AuthzService.class);
+
     public enum Permit {{ READ, WRITE }}
 
-    @Inject JsonWebToken jwt;
-    @Inject SecurityIdentity identity;
-    @Inject @RestClient AuthorizationClient authorizationClient;
+    @Context
+    ContainerRequestContext req;
+
+    @Inject
+    @RestClient
+    AuthorizationClient authorizationClient;
+
+    @ConfigProperty(name = "security.authz.bypass", defaultValue = "false")
+    boolean authzBypass;
 
     public void assertAuthorized(String context, Permit permit) {{
-        String userId = JwtUserIdResolver.resolve(jwt);
-        Set<String> roles = JwtRolesResolver.resolveAllRoles(jwt);
-        String bearer = rawBearer(identity);
-        if (bearer == null) throw new NotAuthorizedException("Bearer token missing");
+
+        // bypass B2B
+        if (Boolean.TRUE.equals(req.getProperty(B2BTokenFilter.B2B_SUPER_USER_KEY))) {{
+            LOG.infof("B2B SUPER_USER bypass. context=%s permit=%s", context, permit.name());
+            return;
+        }}
+
+        // bypass dev/test
+        if (authzBypass) {{
+            LOG.infof("AuthzBypass attivo -> skip authorization check. context=%s permit=%s", context, permit.name());
+            return;
+        }}
+
+        String bearer = AuthorizationUtils.getBearer(req);
+        DecodedJWT jwt = AuthorizationUtils.decode(bearer);
+        String userId = AuthorizationUtils.resolveUserId(jwt);
+        Set<String> roles = AuthorizationUtils.resolveRoles(jwt);
+
         try {{
-            AuthzRequest req = new AuthzRequest(userId, context, permit.name(), roles);
-            AuthzResponse resp = authorizationClient.check(bearer, req);
+            AuthzRequest authzReq = new AuthzRequest(userId, context, permit.name(), roles);
+            AuthzResponse resp = authorizationClient.check(bearer, authzReq);
             if (resp == null || !resp.enabled()) {{
                 String reason = (resp != null && resp.reason() != null && !resp.reason().isBlank())
                         ? resp.reason() : "User not enabled";
@@ -2882,11 +2905,6 @@ public class AuthzService {{
         }} catch (Exception e) {{
             throw new ServiceUnavailableException("Authorization service unavailable");
         }}
-    }}
-
-    private static String rawBearer(SecurityIdentity identity) {{
-        TokenCredential tc = identity.getCredential(TokenCredential.class);
-        return (tc == null || tc.getToken() == null) ? null : "Bearer " + tc.getToken();
     }}
 }}
 """
@@ -2901,13 +2919,14 @@ import {lib_pkg}.resolver.MinimalContextResolver;
 import {lib_pkg}.service.AuthzService;
 import jakarta.annotation.Priority;
 import jakarta.inject.Inject;
+import jakarta.inject.Singleton;
 import jakarta.ws.rs.Priorities;
 import jakarta.ws.rs.container.*;
 import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.ext.Provider;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-@Provider @AuthzRead @Priority(Priorities.AUTHORIZATION)
+@Provider @AuthzRead @Singleton @Priority(Priorities.AUTHORIZATION)
 public class AuthzReadFilter implements ContainerRequestFilter {{
     @Context ResourceInfo resourceInfo;
     @Inject AuthzService authzService;
@@ -2932,13 +2951,14 @@ import {lib_pkg}.resolver.MinimalContextResolver;
 import {lib_pkg}.service.AuthzService;
 import jakarta.annotation.Priority;
 import jakarta.inject.Inject;
+import jakarta.inject.Singleton;
 import jakarta.ws.rs.Priorities;
 import jakarta.ws.rs.container.*;
 import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.ext.Provider;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
-@Provider @AuthzWrite @Priority(Priorities.AUTHORIZATION)
+@Provider @AuthzWrite @Singleton @Priority(Priorities.AUTHORIZATION)
 public class AuthzWriteFilter implements ContainerRequestFilter {{
     @Context ResourceInfo resourceInfo;
     @Inject AuthzService authzService;
@@ -3077,6 +3097,443 @@ public final class JwtRolesResolver {{
 # ═════════════════════════════════════════════════════════════════════════════
 # SCAFFOLD FUNCTIONS
 # ═════════════════════════════════════════════════════════════════════════════
+
+def gen_lib_authorization_utils(lib_pkg):
+    return f"""\
+package {lib_pkg}.util;
+
+import com.auth0.jwt.JWT;
+import com.auth0.jwt.interfaces.DecodedJWT;
+import jakarta.ws.rs.NotAuthorizedException;
+import jakarta.ws.rs.container.ContainerRequestContext;
+import java.util.*;
+
+public final class AuthorizationUtils {{
+
+    private AuthorizationUtils() {{}}
+
+    // =========================================================
+    // BEARER HEADER
+    // =========================================================
+    public static String getBearer(ContainerRequestContext req) {{
+        String header = req.getHeaderString("Authorization");
+        if (header == null || header.isBlank()) {{
+            throw new NotAuthorizedException("Missing Authorization header");
+        }}
+        return header;
+    }}
+
+    public static String extractToken(String bearer) {{
+        return bearer.startsWith("Bearer ") ? bearer.substring(7) : bearer;
+    }}
+
+    // =========================================================
+    // JWT PARSING (senza validazione firma — la firma è verificata dall'authorization service)
+    // =========================================================
+    public static DecodedJWT decode(String bearer) {{
+        return JWT.decode(extractToken(bearer));
+    }}
+
+    // =========================================================
+    // USER ID
+    // =========================================================
+    public static String resolveUserId(DecodedJWT jwt) {{
+        if (notBlank(jwt.getSubject())) return jwt.getSubject();
+        for (String claim : List.of("userId", "user_id", "preferred_username", "username")) {{
+            String value = jwt.getClaim(claim).asString();
+            if (notBlank(value)) return value;
+        }}
+        String name = jwt.getClaim("name").asString();
+        if (notBlank(name)) return name;
+        return null;
+    }}
+
+    // =========================================================
+    // ROLES
+    // =========================================================
+    public static Set<String> resolveRoles(DecodedJWT jwt) {{
+        Set<String> roles = new HashSet<>();
+        List<String> list = jwt.getClaim("roles").asList(String.class);
+        if (list != null) roles.addAll(list);
+        String role = jwt.getClaim("role").asString();
+        if (notBlank(role)) roles.add(role);
+        return roles;
+    }}
+
+    // =========================================================
+    private static boolean notBlank(String s) {{
+        return s != null && !s.trim().isEmpty();
+    }}
+}}
+"""
+
+
+def gen_lib_adsf_token_dto(lib_pkg):
+    return f"""\
+package {lib_pkg}.dto;
+
+public record AdsfTokenDto(
+    String access_token,
+    String token_type,
+    int expires_in,
+    String scope
+) {{}}
+"""
+
+
+def gen_lib_adsf_token_cache(lib_pkg):
+    return f"""\
+package {lib_pkg}.cache;
+
+import java.util.Optional;
+import jakarta.enterprise.context.ApplicationScoped;
+
+@ApplicationScoped
+public class AdsfTokenCache {{
+
+    private String token;
+    private long expiryEpochMillis;
+
+    public synchronized Optional<String> getValidToken() {{
+        if (token == null) return Optional.empty();
+        long now = System.currentTimeMillis();
+        if (now < (expiryEpochMillis - 10000)) return Optional.of(token);
+        return Optional.empty();
+    }}
+
+    public synchronized void store(String token, int expiresInSeconds) {{
+        this.token = token;
+        this.expiryEpochMillis = System.currentTimeMillis() + (expiresInSeconds * 1000L);
+    }}
+
+    public synchronized void clear() {{
+        this.token = null;
+        this.expiryEpochMillis = 0;
+    }}
+}}
+"""
+
+
+def gen_lib_adsf_token_service(lib_pkg):
+    return f"""\
+package {lib_pkg}.service;
+
+import {lib_pkg}.cache.AdsfTokenCache;
+import {lib_pkg}.dto.AdsfTokenDto;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import jakarta.ws.rs.client.Client;
+import jakarta.ws.rs.client.ClientBuilder;
+import jakarta.ws.rs.client.Entity;
+import jakarta.ws.rs.core.Form;
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+@ApplicationScoped
+public class AdsfTokenService {{
+
+    private static final Logger LOG = LoggerFactory.getLogger(AdsfTokenService.class);
+
+    @ConfigProperty(name = "adsf.token.url")
+    String tokenUrl;
+
+    @Inject
+    AdsfTokenCache cache;
+
+    private final Client client = ClientBuilder.newClient();
+
+    public String getToken(String clientId, String clientSecret,
+                           String resource, String resourcePrefix, String scope) {{
+        return cache.getValidToken()
+                .orElseGet(() -> fetchAndCacheToken(clientId, clientSecret, resource, resourcePrefix, scope));
+    }}
+
+    public void invalidate() {{
+        LOG.warn("Token ADFS invalidato");
+        cache.clear();
+    }}
+
+    private String fetchAndCacheToken(String clientId, String clientSecret,
+                                      String resource, String resourcePrefix, String scope) {{
+        LOG.debug("Recupero nuovo token ADFS");
+        Form form = new Form()
+                .param("grant_type", "client_credentials")
+                .param("client_id", clientId)
+                .param("client_secret", clientSecret)
+                .param("resource", resourcePrefix + resource)
+                .param("scope", scope);
+
+        try (Response response = client.target(tokenUrl)
+                .request(MediaType.APPLICATION_JSON)
+                .post(Entity.entity(form, MediaType.APPLICATION_FORM_URLENCODED))) {{
+
+            int status = response.getStatus();
+            if (status != Response.Status.OK.getStatusCode()) {{
+                String body = response.readEntity(String.class);
+                LOG.error("Errore ADFS token. HTTP={{}} body={{}}", status, body);
+                throw new RuntimeException("Errore recupero token ADFS: HTTP " + status);
+            }}
+
+            AdsfTokenDto dto = response.readEntity(AdsfTokenDto.class);
+            if (dto == null || dto.access_token() == null) {{
+                throw new RuntimeException("Token ADFS nullo o malformato");
+            }}
+            cache.store(dto.access_token(), dto.expires_in());
+            LOG.debug("Token cache-ato con expires_in={{}}", dto.expires_in());
+            return dto.access_token();
+        }}
+    }}
+}}
+"""
+
+
+def gen_lib_adsf_auth_filter(lib_pkg):
+    return f"""\
+package {lib_pkg}.filter;
+
+import {lib_pkg}.service.AdsfTokenService;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import jakarta.ws.rs.client.ClientRequestContext;
+import jakarta.ws.rs.client.ClientRequestFilter;
+import jakarta.ws.rs.ext.Provider;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/** Client-side filter: inietta automaticamente il Bearer ADFS nelle chiamate uscenti. */
+@Provider
+@ApplicationScoped
+public class AdsfAuthFilter implements ClientRequestFilter {{
+
+    private static final Logger LOG = LoggerFactory.getLogger(AdsfAuthFilter.class);
+
+    @Inject AdsfTokenService tokenService;
+
+    @ConfigProperty(name = "adsf.client.id")
+    String clientId;
+
+    @ConfigProperty(name = "adsf.client.secret")
+    String clientSecret;
+
+    @ConfigProperty(name = "adsf.resource.prefix")
+    String resourcePrefix;
+
+    @Override
+    public void filter(ClientRequestContext requestContext) {{
+        try {{
+            String resource = requestContext.getUri().getPath();
+            String token = tokenService.getToken(clientId, clientSecret, resource, resourcePrefix, "default");
+            requestContext.getHeaders().putSingle("Authorization", "Bearer " + token);
+        }} catch (Exception ex) {{
+            LOG.error("Errore nel filtro Authorization", ex);
+            throw new RuntimeException("Errore generazione token", ex);
+        }}
+    }}
+}}
+"""
+
+
+def gen_lib_data_platform_client(lib_pkg):
+    return f"""\
+package {lib_pkg}.client;
+
+import {lib_pkg}.filter.AdsfAuthFilter;
+import jakarta.ws.rs.*;
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
+import org.eclipse.microprofile.rest.client.annotation.RegisterProvider;
+import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
+
+/**
+ * Client REST generico per DataPlatform.
+ * Il filtro AdsfAuthFilter inietta automaticamente il Bearer ADFS.
+ * Configurare: dataplatform-client/mp-rest/url
+ */
+@RegisterRestClient(configKey = "dataplatform-client")
+@RegisterProvider(AdsfAuthFilter.class)
+@Path("/")
+@Produces(MediaType.APPLICATION_JSON)
+@Consumes(MediaType.APPLICATION_JSON)
+public interface DataPlatformClient {{
+
+    @GET  @Path("/{{resource}}") Response get( @PathParam("resource") String resource);
+    @POST @Path("/{{resource}}") Response post(@PathParam("resource") String resource, Object body);
+}}
+"""
+
+
+def gen_lib_custom_http_client(lib_pkg):
+    return f"""\
+package {lib_pkg}.config;
+
+import jakarta.enterprise.context.ApplicationScoped;
+import org.apache.http.client.methods.CloseableHttpResponse;
+import org.apache.http.client.methods.HttpEntityEnclosingRequestBase;
+import org.apache.http.entity.ContentType;
+import org.apache.http.entity.StringEntity;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClients;
+import org.apache.http.util.EntityUtils;
+import java.net.URI;
+
+/** Wrapper Apache HttpClient per GET con body (non supportato da JAX-RS standard). */
+@ApplicationScoped
+public class CustomHttpClient {{
+
+    private final CloseableHttpClient client = HttpClients.createDefault();
+
+    public record HttpResult(int statusCode, String body) {{}}
+
+    public HttpResult getWithBody(String url, String body, String bearerToken) throws Exception {{
+        HttpEntityEnclosingRequestBase request = new HttpEntityEnclosingRequestBase() {{
+            @Override public String getMethod() {{ return "GET"; }}
+        }};
+        request.setURI(new URI(url));
+        request.setHeader("Authorization", bearerToken);
+        request.setHeader("Content-Type", "application/json");
+        if (body != null) request.setEntity(new StringEntity(body, ContentType.APPLICATION_JSON));
+
+        try (CloseableHttpResponse response = client.execute(request)) {{
+            int statusCode = response.getStatusLine().getStatusCode();
+            String responseBody = response.getEntity() != null
+                    ? EntityUtils.toString(response.getEntity()) : null;
+            return new HttpResult(statusCode, responseBody);
+        }}
+    }}
+}}
+"""
+
+
+def gen_lib_adsf_rest_client_service(lib_pkg):
+    return f"""\
+package {lib_pkg}.service;
+
+import {lib_pkg}.client.DataPlatformClient;
+import {lib_pkg}.config.CustomHttpClient;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import jakarta.ws.rs.core.Response;
+import org.eclipse.microprofile.rest.client.inject.RestClient;
+import org.jboss.resteasy.reactive.ClientWebApplicationException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * Servizio generico per chiamate a DataPlatform con autenticazione ADFS.
+ * Gestisce retry automatico (MAX 3) e token refresh su 401.
+ */
+@ApplicationScoped
+public class AdsfRestClientService {{
+
+    private static final Logger LOG = LoggerFactory.getLogger(AdsfRestClientService.class);
+    private static final int MAX_RETRY = 3;
+    private static final long RETRY_SLEEP_MS = 3000L;
+
+    @Inject AdsfTokenService tokenService;
+    @Inject @RestClient DataPlatformClient client;
+    @Inject CustomHttpClient customHttpClient;
+    @Inject ObjectMapper objectMapper;
+
+    /** GET con body (Apache HttpClient — usare quando il body è richiesto nella GET). */
+    public CustomHttpClient.HttpResult getWithBody(String baseUrl, String resourcePath,
+            Object requestBodyObj, String clientId, String clientSecret,
+            String resourcePrefix, String tokenScope) throws Exception {{
+        int attempt = 0;
+        final String url = buildUrl(baseUrl, resourcePath);
+        final String jsonBody = (requestBodyObj != null)
+                ? objectMapper.writeValueAsString(requestBodyObj) : null;
+
+        while (true) {{
+            attempt++;
+            try {{
+                String token = tokenService.getToken(clientId, clientSecret, resourcePath, resourcePrefix, tokenScope);
+                CustomHttpClient.HttpResult res = customHttpClient.getWithBody(url, jsonBody, "Bearer " + token);
+                if (res.statusCode() == 401) {{
+                    LOG.warn("GET-with-body: 401 su {{}} -> invalido token", url);
+                    tokenService.invalidate();
+                    throw new RetryableAuthException("401 from DataPlatform");
+                }}
+                return res;
+            }} catch (RetryableAuthException ex) {{
+                // retry
+            }} catch (Exception ex) {{
+                if (attempt > MAX_RETRY) throw new RuntimeException("Errore GET-with-body verso " + url, ex);
+                LOG.error("Retry {{}}/{{}}: {{}}", attempt, MAX_RETRY, ex.getMessage());
+            }}
+            sleep();
+        }}
+    }}
+
+    /** GET standard (MicroProfile REST Client). */
+    public Response get(String resourcePath, String clientId, String clientSecret,
+                        String resourcePrefix) throws Exception {{
+        int attempt = 0;
+        while (true) {{
+            attempt++;
+            try {{
+                return client.get(resourcePath);
+            }} catch (ClientWebApplicationException e) {{
+                int status = getStatus(e);
+                if (status == 401) tokenService.invalidate();
+                if (attempt > MAX_RETRY) throw new RuntimeException("Errore GET HTTP " + status + " su " + resourcePath, e);
+                LOG.error("Retry {{}}/{{}}: HTTP {{}}", attempt, MAX_RETRY, status);
+            }} catch (Exception ex) {{
+                if (attempt > MAX_RETRY) throw new RuntimeException("Errore GET su " + resourcePath, ex);
+                LOG.error("Retry {{}}/{{}}: {{}}", attempt, MAX_RETRY, ex.getMessage());
+            }}
+            sleep();
+        }}
+    }}
+
+    /** POST standard (MicroProfile REST Client). */
+    public Response post(String resourcePath, Object request) throws Exception {{
+        int attempt = 0;
+        while (true) {{
+            attempt++;
+            try {{
+                return client.post(resourcePath, request);
+            }} catch (ClientWebApplicationException e) {{
+                int status = getStatus(e);
+                if (status == 401) tokenService.invalidate();
+                if (attempt > MAX_RETRY) throw new RuntimeException("Errore POST HTTP " + status + " su " + resourcePath, e);
+                LOG.error("Retry {{}}/{{}}: HTTP {{}}", attempt, MAX_RETRY, status);
+            }} catch (Exception ex) {{
+                if (attempt > MAX_RETRY) throw new RuntimeException("Errore POST su " + resourcePath, ex);
+                LOG.error("Retry {{}}/{{}}: {{}}", attempt, MAX_RETRY, ex.getMessage());
+            }}
+            sleep();
+        }}
+    }}
+
+    private String buildUrl(String baseUrl, String resourcePath) {{
+        if (baseUrl == null) return resourcePath;
+        if (baseUrl.endsWith("/") && resourcePath.startsWith("/"))
+            return baseUrl.substring(0, baseUrl.length() - 1) + resourcePath;
+        if (!baseUrl.endsWith("/") && !resourcePath.startsWith("/"))
+            return baseUrl + "/" + resourcePath;
+        return baseUrl + resourcePath;
+    }}
+
+    private static int getStatus(ClientWebApplicationException e) {{
+        return (e.getResponse() != null) ? e.getResponse().getStatus() : -1;
+    }}
+
+    private void sleep() {{
+        try {{ Thread.sleep(RETRY_SLEEP_MS); }}
+        catch (InterruptedException e) {{ Thread.currentThread().interrupt(); throw new RuntimeException("Thread interrotto durante retry", e); }}
+    }}
+
+    private static class RetryableAuthException extends RuntimeException {{
+        RetryableAuthException(String m) {{ super(m); }}
+    }}
+}}
+"""
+
 
 def gen_lib_b2b_token_utils(lib_pkg):
     return f"""\
@@ -3271,7 +3728,15 @@ def scaffold_library(lib_name: str, lib_pkg: str, output_dir: str) -> None:
     write(java / "filter"       / "AuthzReadFilter.java",   gen_lib_authz_read_filter(lib_pkg))
     write(java / "filter"       / "AuthzWriteFilter.java",  gen_lib_authz_write_filter(lib_pkg))
     write(java / "filter"       / "B2BTokenFilter.java",    gen_lib_b2b_token_filter(lib_pkg))
+    write(java / "filter"       / "AdsfAuthFilter.java",    gen_lib_adsf_auth_filter(lib_pkg))
+    write(java / "util"         / "AuthorizationUtils.java", gen_lib_authorization_utils(lib_pkg))
     write(java / "util"         / "B2BTokenUtils.java",     gen_lib_b2b_token_utils(lib_pkg))
+    write(java / "client"       / "DataPlatformClient.java",gen_lib_data_platform_client(lib_pkg))
+    write(java / "config"       / "CustomHttpClient.java",  gen_lib_custom_http_client(lib_pkg))
+    write(java / "cache"        / "AdsfTokenCache.java",    gen_lib_adsf_token_cache(lib_pkg))
+    write(java / "dto"          / "AdsfTokenDto.java",      gen_lib_adsf_token_dto(lib_pkg))
+    write(java / "service"      / "AdsfTokenService.java",  gen_lib_adsf_token_service(lib_pkg))
+    write(java / "service"      / "AdsfRestClientService.java", gen_lib_adsf_rest_client_service(lib_pkg))
     write(java / "interceptor"  / "LogPmrInterceptor.java", gen_lib_log_pmr_interceptor(lib_pkg))
     write(java / "resolver"     / "MinimalContextResolver.java", gen_lib_minimal_context_resolver(lib_pkg))
     write(java / "resolver"     / "JwtUserIdResolver.java", gen_lib_jwt_user_id_resolver(lib_pkg))

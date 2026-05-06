@@ -83,7 +83,7 @@ python3 ./scaffold_quarkus.py \
 - `quarkus-hibernate-validator`
 - `quarkus-messaging-kafka` + `quarkus-smallrye-reactive-messaging-kafka`
 - `quarkus-redis-client` + `quarkus-cache`
-- `quarkus-oidc` + `quarkus-smallrye-jwt`
+- `quarkus-oidc`
 - `quarkus-smallrye-health`
 - `quarkus-micrometer-registry-prometheus`
 - `quarkus-smallrye-openapi`
@@ -233,7 +233,6 @@ public class XxxService {
 public class XxxService {
     @Inject XxxRepository repository;
     @Inject XxxMapper mapper;
-    @Inject Instance<JsonWebToken> jwt;
 
     public List<XxxDTO> getAll() {
         return mapper.toDtoList(repository.findAllActive());
@@ -381,10 +380,10 @@ public interface XxxDgClient {
 3. Redis (`quarkus.redis.hosts`)
 4. Kafka producer (`mp.messaging.outgoing.kafka-out.*`)
 5. Kafka consumer **commentato** (da abilitare se necessario)
-6. OIDC (`quarkus.oidc.*`)
+6. Security HTTP policy (`quarkus.http.auth.permission.*`) + OIDC disabilitato
 7. Health + Metrics + OpenAPI
 8. Client REST (`<service>-dg-client/mp-rest/url`)
-9. Profilo `%dev` con OIDC disabilitato e Kafka PLAINTEXT
+9. Profilo `%dev` con security.authz.bypass e Kafka PLAINTEXT
 
 ### DataGateway (aggiunge rispetto a Frontiera)
 
@@ -429,6 +428,7 @@ public interface XxxDgClient {
 ### Solo Frontiera
 - **NON** usare `@Transactional` (non c'è JPA)
 - **NON** usare `@Inject SecurityIdentity` direttamente nelle Resource: sicurezza gestita da `pmr-common-library` tramite `@AuthzRead`/`@AuthzWrite`
+- **IN DEV** usare `%dev.security.authz.bypass=true` per testare i filter senza authorization service attivo
 - **SEMPRE** propagare i 4 header (kl, tid, modAsync, processType) nelle chiamate ai client
 - **SEMPRE** usare `try-with-resources` sui client REST (`try (Response resp = client.xxx()) { ... }`)
 
@@ -486,7 +486,7 @@ python3 ./scaffold_quarkus.py \
 - `quarkus-hibernate-validator`
 - `quarkus-messaging-kafka` + `quarkus-smallrye-reactive-messaging-kafka`
 - `quarkus-redis-client` + `quarkus-cache`
-- `quarkus-oidc` + `quarkus-smallrye-jwt`
+- `quarkus-oidc`
 - `quarkus-smallrye-health`
 - `quarkus-micrometer-registry-prometheus`
 - `quarkus-smallrye-openapi`
@@ -635,10 +635,10 @@ Ogni microservizio deve avere configurate:
 2. Logging con MDC pattern (API, TN, KL, MK, PT)
 3. Redis (`quarkus.redis.hosts`)
 4. Kafka producer (`mp.messaging.outgoing.kafka-out.*`)
-5. OIDC (`quarkus.oidc.*`)
+5. Security HTTP policy (`quarkus.http.auth.permission.*`) + OIDC disabilitato
 6. Health + Metrics + OpenAPI
 7. Client REST (`<service>-dg-client/mp-rest/url`)
-8. Profilo `%dev` con OIDC disabilitato e Kafka PLAINTEXT
+8. Profilo `%dev` con security.authz.bypass e Kafka PLAINTEXT
 
 ---
 
@@ -657,6 +657,7 @@ Ogni microservizio deve avere configurate:
 
 - **NON** usare `@Transactional` (non c'è JPA nel progetto)
 - **NON** usare `@Inject SecurityIdentity` direttamente nelle Resource: la sicurezza è gestita dalla `pmr-common-library` tramite `@AuthzRead`/`@AuthzWrite`
+- **IN DEV** usare `%dev.security.authz.bypass=true` per testare i filter senza authorization service attivo
 - **SEMPRE** usare `@Blocking` nelle Resource (il progetto usa Quarkus REST reattivo)
 - **SEMPRE** usare `Utility.*` per costruire le Response (mai `Response.ok()` diretto)
 - **SEMPRE** propagare i 4 header (kl, tid, modAsync, processType) nelle chiamate ai client
