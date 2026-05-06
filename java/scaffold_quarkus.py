@@ -627,93 +627,6 @@ public enum MessageTypeEnum {{
 
 
 
-def gen_cache_utils(pkg):
-    return f"""\
-package {pkg}.utils;
-
-import java.util.Objects;
-import java.util.function.Supplier;
-
-import org.eclipse.microprofile.config.inject.ConfigProperty;
-import org.jboss.logging.Logger;
-
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
-
-import io.quarkus.redis.datasource.RedisDataSource;
-import io.quarkus.redis.datasource.value.ValueCommands;
-import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.inject.Inject;
-
-@ApplicationScoped
-public class CacheUtils {{
-
-    private static final Logger LOG = Logger.getLogger(CacheUtils.class);
-
-    private final ObjectMapper objectMapper;
-    private final ValueCommands<String, String> values;
-
-    @ConfigProperty(name = "app.cache.redis.prefix", defaultValue = "cache")
-    String prefix;
-
-    @Inject
-    public CacheUtils(RedisDataSource redisDS, ObjectMapper objectMapper) {{
-        this.objectMapper = objectMapper;
-        this.values = redisDS.value(String.class);
-    }}
-
-    public String key(String domain, String feature, String... parts) {{
-        StringBuilder sb = new StringBuilder(prefix)
-                .append(":").append(sanitize(domain))
-                .append(":").append(sanitize(feature));
-        if (parts != null) {{
-            for (String p : parts) {{
-                if (p != null && !p.isBlank()) sb.append(":").append(sanitize(p));
-            }}
-        }}
-        return sb.toString();
-    }}
-
-    private String sanitize(String s) {{
-        return s.trim().replace(" ", "_");
-    }}
-
-    public <T> T get(String key, TypeReference<T> typeRef) {{
-        Objects.requireNonNull(key, "key");
-        Objects.requireNonNull(typeRef, "typeRef");
-        try {{
-            String json = values.get(key);
-            if (json == null || json.isBlank()) return null;
-            return objectMapper.readValue(json, typeRef);
-        }} catch (Exception e) {{
-            LOG.debugf("Cache GET fallita (key=%s): %s", key, e.toString());
-            return null;
-        }}
-    }}
-
-    public <T> void put(String key, T value, int ttlSeconds) {{
-        Objects.requireNonNull(key, "key");
-        if (ttlSeconds <= 0) {{
-            LOG.debugf("Cache PUT skipped (ttlSeconds<=0) key=%s", key);
-            return;
-        }}
-        try {{
-            String json = objectMapper.writeValueAsString(value);
-            values.setex(key, (long) ttlSeconds, json);
-        }} catch (Exception e) {{
-            LOG.debugf("Cache PUT fallita (key=%s): %s", key, e.toString());
-        }}
-    }}
-
-    public <T> T getOrCompute(String key, TypeReference<T> typeRef, int ttlSeconds, Supplier<T> supplier) {{
-        T cached = get(key, typeRef);
-        if (cached != null) return cached;
-        T computed = supplier.get();
-        put(key, computed, ttlSeconds);
-        return computed;
-    }}
-}}
-"""
 
 
 def gen_remote_call_exception(pkg):
@@ -1201,7 +1114,7 @@ public interface SampleDgClient {{
 """
 
 
-def gen_sample_service(pkg):
+def gen_sample_service(pkg, lib_pkg):
     domain = pkg.split(".")[-1]
     return f"""\
 package {pkg}.service;
@@ -1219,7 +1132,7 @@ import {pkg}.dto.SampleDTO;
 import {pkg}.exception.RemoteCallException;
 import {pkg}.response.CustomResponse;
 import {pkg}.response.GenericResponse.Message;
-import {pkg}.utils.CacheUtils;
+import {lib_pkg}.util.CacheUtils;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.core.Response;
@@ -2681,6 +2594,9 @@ def gen_lib_pom(lib_name, lib_group, lib_pkg):
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-rest</artifactId><scope>provided</scope></dependency>
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-rest-client-jackson</artifactId><scope>provided</scope></dependency>
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-oidc</artifactId><scope>provided</scope></dependency>
+        <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-redis-client</artifactId><scope>provided</scope></dependency>
+        <dependency><groupId>org.apache.httpcomponents</groupId><artifactId>httpclient</artifactId><version>4.5.14</version></dependency>
+        <dependency><groupId>com.fasterxml.jackson.core</groupId><artifactId>jackson-databind</artifactId></dependency>
     </dependencies>
 
     <build>
@@ -2700,25 +2616,40 @@ def gen_lib_application_properties():
     return """\
 ############################################
 # AUTHORIZATION REST CLIENT
-# configKey = "authorization-client"
 ############################################
 authorization-client/mp-rest/url=${AUTHZ_URL:http://localhost:8090/authorization}
 authorization-client/mp-rest/connectTimeout=2000
 authorization-client/mp-rest/readTimeout=3000
 
 ############################################
-# B2B TOKEN (HMAC-SHA256)
-# Segreto condiviso tra tutti i microservizi
-# che usano la libreria (min 32 char).
-# In produzione impostare B2B_SECRET come env var.
+# ADFS TOKEN (CLIENT CREDENTIALS M2M)
 ############################################
-# Segreto per firmare il token B2B
+adsf.token.url=${ADSF_TOKEN_URL:https://your-adfs/token}
+adsf.client.id=${ADSF_CLIENT_ID:your-client-id}
+adsf.client.secret=${ADSF_CLIENT_SECRET:your-secret}
+# Resource audience ADFS (App ID URI del backend target)
+adsf.resource.prefix=${ADSF_RESOURCE_PREFIX:your-prefix}
+# Scope default
+adsf.scope.default=${ADSF_SCOPE:default}
+
+############################################
+# REDIS (cache distribuita)
+############################################
+quarkus.redis.hosts=${REDIS_HOSTS:redis://localhost:6379}
+
+############################################
+# APP CACHE (Redis - custom)
+############################################
+app.cache.redis.prefix=${CACHE_REDIS_PREFIX:cache}
+# TTL cache getWithBody di AdsfRestClientService (secondi)
+cache.adsf-rest-client.get-with-body.ttl-seconds=${CACHE_ADSF_GET_WITH_BODY_TTL:300}
+
+############################################
+# B2B TOKEN (HMAC-SHA256)
+############################################
 security.b2b.secret=${B2B_SECRET:a3f8c2d91e4b7065f2a8c3d4e5f6071829a3b4c5d6e7f8091a2b3c4d5e6f7a8}
-# Durata validità token in secondi (default 5 minuti)
 security.b2b.token-ttl-seconds=${B2B_TOKEN_TTL:300}
-# Abilita/disabilita il filtro di sicurezza (false per ambienti di test)
 security.enabled=${SECURITY_ENABLED:true}
-# Bypass authorization check per dev/test (default: false)
 security.authz.bypass=${SECURITY_AUTHZ_BYPASS:false}
 """
 
@@ -3240,15 +3171,27 @@ public class AdsfTokenService {{
     @ConfigProperty(name = "adsf.token.url")
     String tokenUrl;
 
+    @ConfigProperty(name = "adsf.client.id")
+    String clientId;
+
+    @ConfigProperty(name = "adsf.client.secret")
+    String clientSecret;
+
+    @ConfigProperty(name = "adsf.resource.prefix")
+    String resourcePrefix;
+
+    @ConfigProperty(name = "adsf.scope.default")
+    String scope;
+
     @Inject
     AdsfTokenCache cache;
 
     private final Client client = ClientBuilder.newClient();
 
-    public String getToken(String clientId, String clientSecret,
-                           String resource, String resourcePrefix, String scope) {{
+    /** Restituisce un token M2M valido (usa cache se presente). */
+    public String getToken() {{
         return cache.getValidToken()
-                .orElseGet(() -> fetchAndCacheToken(clientId, clientSecret, resource, resourcePrefix, scope));
+                .orElseGet(this::fetchAndCacheToken);
     }}
 
     public void invalidate() {{
@@ -3256,14 +3199,13 @@ public class AdsfTokenService {{
         cache.clear();
     }}
 
-    private String fetchAndCacheToken(String clientId, String clientSecret,
-                                      String resource, String resourcePrefix, String scope) {{
-        LOG.debug("Recupero nuovo token ADFS");
+    private String fetchAndCacheToken() {{
+        LOG.debug("Recupero nuovo token ADFS per client_id={{}}", clientId);
         Form form = new Form()
                 .param("grant_type", "client_credentials")
                 .param("client_id", clientId)
                 .param("client_secret", clientSecret)
-                .param("resource", resourcePrefix + resource)
+                .param("resource", resourcePrefix)
                 .param("scope", scope);
 
         try (Response response = client.target(tokenUrl)
@@ -3290,48 +3232,45 @@ public class AdsfTokenService {{
 """
 
 
-def gen_lib_adsf_auth_filter(lib_pkg):
+def gen_lib_adsf_m2m_headers_factory(lib_pkg):
     return f"""\
-package {lib_pkg}.filter;
+package {lib_pkg}.factory;
 
 import {lib_pkg}.service.AdsfTokenService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import jakarta.ws.rs.client.ClientRequestContext;
-import jakarta.ws.rs.client.ClientRequestFilter;
-import jakarta.ws.rs.ext.Provider;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import jakarta.ws.rs.core.MultivaluedHashMap;
+import jakarta.ws.rs.core.MultivaluedMap;
+import org.eclipse.microprofile.rest.client.ext.ClientHeadersFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import java.util.List;
 
-/** Client-side filter: inietta automaticamente il Bearer ADFS nelle chiamate uscenti. */
-@Provider
+/**
+ * Factory MicroProfile che inietta l'header Authorization Bearer M2M (ADFS)
+ * su ogni chiamata del DataPlatformClient, senza usare un ClientRequestFilter.
+ */
 @ApplicationScoped
-public class AdsfAuthFilter implements ClientRequestFilter {{
+public class AdsfM2MHeadersFactory implements ClientHeadersFactory {{
 
-    private static final Logger LOG = LoggerFactory.getLogger(AdsfAuthFilter.class);
+    private static final Logger LOG = LoggerFactory.getLogger(AdsfM2MHeadersFactory.class);
 
-    @Inject AdsfTokenService tokenService;
-
-    @ConfigProperty(name = "adsf.client.id")
-    String clientId;
-
-    @ConfigProperty(name = "adsf.client.secret")
-    String clientSecret;
-
-    @ConfigProperty(name = "adsf.resource.prefix")
-    String resourcePrefix;
+    @Inject
+    AdsfTokenService tokenService;
 
     @Override
-    public void filter(ClientRequestContext requestContext) {{
+    public MultivaluedMap<String, String> update(
+            MultivaluedMap<String, String> incomingHeaders,
+            MultivaluedMap<String, String> clientOutgoingHeaders) {{
+
+        MultivaluedMap<String, String> headers = new MultivaluedHashMap<>();
         try {{
-            String resource = requestContext.getUri().getPath();
-            String token = tokenService.getToken(clientId, clientSecret, resource, resourcePrefix, "default");
-            requestContext.getHeaders().putSingle("Authorization", "Bearer " + token);
+            headers.put("Authorization", List.of("Bearer " + tokenService.getToken()));
         }} catch (Exception ex) {{
-            LOG.error("Errore nel filtro Authorization", ex);
-            throw new RuntimeException("Errore generazione token", ex);
+            LOG.error("Errore generazione token ADFS per header M2M", ex);
+            throw new RuntimeException("Errore generazione token M2M", ex);
         }}
+        return headers;
     }}
 }}
 """
@@ -3341,20 +3280,20 @@ def gen_lib_data_platform_client(lib_pkg):
     return f"""\
 package {lib_pkg}.client;
 
-import {lib_pkg}.filter.AdsfAuthFilter;
+import {lib_pkg}.factory.AdsfM2MHeadersFactory;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
-import org.eclipse.microprofile.rest.client.annotation.RegisterProvider;
+import org.eclipse.microprofile.rest.client.annotation.RegisterClientHeaders;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 
 /**
  * Client REST generico per DataPlatform.
- * Il filtro AdsfAuthFilter inietta automaticamente il Bearer ADFS.
+ * AdsfM2MHeadersFactory inietta automaticamente il Bearer ADFS M2M.
  * Configurare: dataplatform-client/mp-rest/url
  */
 @RegisterRestClient(configKey = "dataplatform-client")
-@RegisterProvider(AdsfAuthFilter.class)
+@RegisterClientHeaders(AdsfM2MHeadersFactory.class)
 @Path("/")
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)
@@ -3408,24 +3347,118 @@ public class CustomHttpClient {{
 """
 
 
+def gen_lib_cache_utils(lib_pkg):
+    return f"""\
+package {lib_pkg}.util;
+
+import java.util.Objects;
+import java.util.function.Supplier;
+
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import io.quarkus.redis.datasource.RedisDataSource;
+import io.quarkus.redis.datasource.value.ValueCommands;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+
+/** Utility Redis distribuita per cache-aside. Condivisa da tutti i microservizi PMR. */
+@ApplicationScoped
+public class CacheUtils {{
+
+    private static final Logger LOG = LoggerFactory.getLogger(CacheUtils.class);
+
+    private final ObjectMapper objectMapper;
+    private final ValueCommands<String, String> values;
+
+    @ConfigProperty(name = "app.cache.redis.prefix", defaultValue = "cache")
+    String prefix;
+
+    @Inject
+    public CacheUtils(RedisDataSource redisDS, ObjectMapper objectMapper) {{
+        this.objectMapper = objectMapper;
+        this.values = redisDS.value(String.class);
+    }}
+
+    public String key(String domain, String feature, String... parts) {{
+        StringBuilder sb = new StringBuilder(prefix)
+                .append(":").append(sanitize(domain))
+                .append(":").append(sanitize(feature));
+        if (parts != null) {{
+            for (String p : parts) {{
+                if (p != null && !p.isBlank()) sb.append(":").append(sanitize(p));
+            }}
+        }}
+        return sb.toString();
+    }}
+
+    private String sanitize(String s) {{
+        return s.trim().replace(" ", "_");
+    }}
+
+    public <T> T get(String key, TypeReference<T> typeRef) {{
+        Objects.requireNonNull(key, "key");
+        Objects.requireNonNull(typeRef, "typeRef");
+        try {{
+            String json = values.get(key);
+            if (json == null || json.isBlank()) return null;
+            return objectMapper.readValue(json, typeRef);
+        }} catch (Exception e) {{
+            LOG.debug("Cache GET fallita (key={{}}): {{}}", key, e.toString());
+            return null;
+        }}
+    }}
+
+    public <T> void put(String key, T value, int ttlSeconds) {{
+        Objects.requireNonNull(key, "key");
+        if (ttlSeconds <= 0) {{
+            LOG.debug("Cache PUT skipped (ttlSeconds<=0) key={{}}", key);
+            return;
+        }}
+        try {{
+            String json = objectMapper.writeValueAsString(value);
+            values.setex(key, (long) ttlSeconds, json);
+        }} catch (Exception e) {{
+            LOG.debug("Cache PUT fallita (key={{}}): {{}}", key, e.toString());
+        }}
+    }}
+
+    public <T> T getOrCompute(String key, TypeReference<T> typeRef, int ttlSeconds, Supplier<T> supplier) {{
+        T cached = get(key, typeRef);
+        if (cached != null) return cached;
+        T computed = supplier.get();
+        put(key, computed, ttlSeconds);
+        return computed;
+    }}
+}}
+"""
+
+
 def gen_lib_adsf_rest_client_service(lib_pkg):
     return f"""\
 package {lib_pkg}.service;
 
 import {lib_pkg}.client.DataPlatformClient;
 import {lib_pkg}.config.CustomHttpClient;
+import {lib_pkg}.util.CacheUtils;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.core.Response;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 import org.jboss.resteasy.reactive.ClientWebApplicationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Servizio generico per chiamate a DataPlatform con autenticazione ADFS.
- * Gestisce retry automatico (MAX 3) e token refresh su 401.
+ * Servizio generico per chiamate a DataPlatform con autenticazione ADFS M2M.
+ * getWithBody usa cache Redis distribuita. Gestisce retry (MAX 3) e token refresh su 401.
  */
 @ApplicationScoped
 public class AdsfRestClientService {{
@@ -3434,29 +3467,55 @@ public class AdsfRestClientService {{
     private static final int MAX_RETRY = 3;
     private static final long RETRY_SLEEP_MS = 3000L;
 
+    private static final TypeReference<CustomHttpClient.HttpResult> HTTP_RESULT_TYPE =
+            new TypeReference<>() {{}};
+
     @Inject AdsfTokenService tokenService;
     @Inject @RestClient DataPlatformClient client;
     @Inject CustomHttpClient customHttpClient;
     @Inject ObjectMapper objectMapper;
+    @Inject CacheUtils cacheUtils;
 
-    /** GET con body (Apache HttpClient — usare quando il body è richiesto nella GET). */
-    public CustomHttpClient.HttpResult getWithBody(String baseUrl, String resourcePath,
-            Object requestBodyObj, String clientId, String clientSecret,
-            String resourcePrefix, String tokenScope) throws Exception {{
-        int attempt = 0;
+    @ConfigProperty(
+        name = "cache.adsf-rest-client.get-with-body.ttl-seconds",
+        defaultValue = "300"
+    )
+    int getWithBodyTtlSeconds;
+
+    /** GET con body (Apache HttpClient) con cache Redis distribuita. */
+    public CustomHttpClient.HttpResult getWithBody(
+            String baseUrl, String resourcePath, Object requestBodyObj) throws Exception {{
+
         final String url = buildUrl(baseUrl, resourcePath);
         final String jsonBody = (requestBodyObj != null)
                 ? objectMapper.writeValueAsString(requestBodyObj) : null;
 
+        String cacheKey = cacheUtils.key(
+                "adsf-rest-client", "get-with-body",
+                "url=" + url,
+                "body=" + (jsonBody != null ? String.valueOf(jsonBody.hashCode()) : "null")
+        );
+
+        CustomHttpClient.HttpResult cached = cacheUtils.get(cacheKey, HTTP_RESULT_TYPE);
+        if (cached != null) {{
+            LOG.debug("Cache HIT GET-with-body: {{}}", url);
+            return cached;
+        }}
+
+        int attempt = 0;
         while (true) {{
             attempt++;
             try {{
-                String token = tokenService.getToken(clientId, clientSecret, resourcePath, resourcePrefix, tokenScope);
+                String token = tokenService.getToken();
                 CustomHttpClient.HttpResult res = customHttpClient.getWithBody(url, jsonBody, "Bearer " + token);
                 if (res.statusCode() == 401) {{
                     LOG.warn("GET-with-body: 401 su {{}} -> invalido token", url);
                     tokenService.invalidate();
                     throw new RetryableAuthException("401 from DataPlatform");
+                }}
+                if (res.statusCode() >= 200 && res.statusCode() < 300) {{
+                    cacheUtils.put(cacheKey, res, getWithBodyTtlSeconds);
+                    LOG.debug("Cache PUT GET-with-body: {{}} ttl={{}}s", url, getWithBodyTtlSeconds);
                 }}
                 return res;
             }} catch (RetryableAuthException ex) {{
@@ -3470,8 +3529,7 @@ public class AdsfRestClientService {{
     }}
 
     /** GET standard (MicroProfile REST Client). */
-    public Response get(String resourcePath, String clientId, String clientSecret,
-                        String resourcePrefix) throws Exception {{
+    public Response get(String resourcePath) throws Exception {{
         int attempt = 0;
         while (true) {{
             attempt++;
@@ -3728,9 +3786,10 @@ def scaffold_library(lib_name: str, lib_pkg: str, output_dir: str) -> None:
     write(java / "filter"       / "AuthzReadFilter.java",   gen_lib_authz_read_filter(lib_pkg))
     write(java / "filter"       / "AuthzWriteFilter.java",  gen_lib_authz_write_filter(lib_pkg))
     write(java / "filter"       / "B2BTokenFilter.java",    gen_lib_b2b_token_filter(lib_pkg))
-    write(java / "filter"       / "AdsfAuthFilter.java",    gen_lib_adsf_auth_filter(lib_pkg))
+    write(java / "factory"      / "AdsfM2MHeadersFactory.java", gen_lib_adsf_m2m_headers_factory(lib_pkg))
     write(java / "util"         / "AuthorizationUtils.java", gen_lib_authorization_utils(lib_pkg))
     write(java / "util"         / "B2BTokenUtils.java",     gen_lib_b2b_token_utils(lib_pkg))
+    write(java / "util"         / "CacheUtils.java",        gen_lib_cache_utils(lib_pkg))
     write(java / "client"       / "DataPlatformClient.java",gen_lib_data_platform_client(lib_pkg))
     write(java / "config"       / "CustomHttpClient.java",  gen_lib_custom_http_client(lib_pkg))
     write(java / "cache"        / "AdsfTokenCache.java",    gen_lib_adsf_token_cache(lib_pkg))
@@ -3827,7 +3886,6 @@ def scaffold_service(sn: str, pkg: str, output_dir: str,
     write(java / "utils"    / "Utility.java",                  gen_utility(pkg))
     write(java / "utils"    / "JsonUtils.java",                gen_json_utils(pkg))
     write(java / "utils"    / "MessageTypeEnum.java",          gen_message_type_enum(pkg))
-    write(java / "utils"    / "CacheUtils.java",               gen_cache_utils(pkg))
 
     write(java / "exception"/ "RemoteCallException.java",      gen_remote_call_exception(pkg))
     write(java / "exception"/ "RetryableRemoteException.java", gen_retryable_remote_exception(pkg))
@@ -3849,7 +3907,7 @@ def scaffold_service(sn: str, pkg: str, output_dir: str,
     write(java / "kafka"    / "DevKafkaTopicInitializer.java", gen_dev_kafka_topic_initializer(pkg))
 
     write(java / "service"  / "TopicService.java",             gen_topic_service(pkg))
-    write(java / "service"  / "SampleService.java",            gen_sample_service(pkg))
+    write(java / "service"  / "SampleService.java",            gen_sample_service(pkg, lib_pkg))
     write(java / "client"   / "SampleDgClient.java",           gen_sample_client(pkg, sn))
     write(java / "dto"      / "SampleDTO.java",                gen_sample_dto(pkg))
     write(java / "resource" / "SampleResource.java",           gen_sample_resource(pkg, sn, lib_pkg))
