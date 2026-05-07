@@ -106,8 +106,9 @@ python3 ./scaffold_quarkus.py \
 
 ```
 <basePackage>/
-├── config/       ApplicationConfig.java, OpenApiConfig.java
-├── filter/       MdcHeadersFilter.java, GlobalHeadersOpenApiFilter.java
+├── config/       ApplicationConfig.java, OpenApiConfig.java, RestApplication.java
+├── filter/       MdcHeadersFilter.java, GlobalHeadersOpenApiFilter.java,
+│                 RequestHeadersContext.java, RestClientHeadersFilter.java
 ├── health/       ApplicationHealthCheck.java
 ├── kafka/        KafkaGenericProducer.java, KafkaGenericConsumer.java
 ├── service/      TopicService.java, <Entità>Service.java...
@@ -115,7 +116,7 @@ python3 ./scaffold_quarkus.py \
 ├── client/       <Entità>DgClient.java...           ← chiama il DG
 ├── dto/          <Entità>DTO.java...
 ├── exception/    RemoteCallException.java, RetryableRemoteException.java
-├── response/     GenericResponse.java, ResponseStatus.java
+├── response/     GenericResponse.java, ResponseStatus.java, CustomResponse.java
 └── utils/        Constants.java, RequestCtx.java, Utility.java,
                   JsonUtils.java, MessageTypeEnum.java
 ```
@@ -124,8 +125,9 @@ python3 ./scaffold_quarkus.py \
 
 ```
 <basePackage>/
-├── config/       ApplicationConfig.java, OpenApiConfig.java
-├── filter/       MdcHeadersFilter.java, GlobalHeadersOpenApiFilter.java
+├── config/       ApplicationConfig.java, OpenApiConfig.java, RestApplication.java
+├── filter/       MdcHeadersFilter.java, GlobalHeadersOpenApiFilter.java,
+│                 RequestHeadersContext.java
 ├── health/       ApplicationHealthCheck.java
 ├── kafka/        KafkaGenericProducer.java, KafkaGenericConsumer.java  ← consumer ATTIVO
 ├── service/      TopicService.java, <Entità>Service.java...
@@ -148,6 +150,9 @@ src/main/resources/db/migration/V1__CREATE_TABLES.sql
 
 ### Resource Frontiera (con autorizzazione)
 
+`Utility` è un bean `@ApplicationScoped` iniettato. I metodi **non** richiedono parametri di contesto
+(path, kl, tid, modAsync, processType, start) perché `Utility` legge il `RequestHeadersContext` iniettato.
+
 ```java
 @Path("/")
 @Produces(MediaType.APPLICATION_JSON)
@@ -157,25 +162,19 @@ src/main/resources/db/migration/V1__CREATE_TABLES.sql
 public class XxxResource {
 
     @Inject XxxService service;
-    @Context ContainerRequestContext ctx;
+    @Inject Utility utility;
 
     @GET
     @AuthzRead                       // dalla pmr-common-library
     @Path("/prefix_entita_operazione")
     public Response metodoCrud() {
-        long   start       = System.nanoTime();
-        String kl          = RequestCtx.kl(ctx);
-        String tid         = RequestCtx.tid(ctx);
-        boolean modAsync   = RequestCtx.modAsync(ctx);
-        String processType = RequestCtx.processType(ctx);
-        final String path  = "/prefix_entita_operazione";
-
         try {
-            return Utility.okOrEmpty(list, path, kl, tid, modAsync, processType, start);
+            List<XxxDTO> list = service.getAll();
+            return utility.okOrEmpty(list);
         } catch (IllegalArgumentException e) {
-            return Utility.badRequest(e.getMessage(), path, kl, tid, modAsync, processType, start);
+            return utility.badRequest(e.getMessage());
         } catch (RemoteCallException e) {
-            return Utility.badGateway(e, path, kl, tid, modAsync, processType, start);
+            return utility.badGateway(e);
         }
     }
 }
@@ -192,21 +191,19 @@ public class XxxResource {
 public class XxxResource {
 
     @Inject XxxService service;
-    @Context ContainerRequestContext ctx;
+    @Inject Utility utility;
 
     @GET
     public Response getAll() {
-        long start = System.nanoTime();
-        final String path = "/entita";
-        String kl = RequestCtx.kl(ctx); String tid = RequestCtx.tid(ctx);
-        boolean modAsync = RequestCtx.modAsync(ctx); String pt = RequestCtx.processType(ctx);
         List<XxxDTO> list = service.getAll();
-        return Utility.okOrEmpty(list, path, kl, tid, modAsync, pt, start);
+        return utility.okOrEmpty(list);
     }
 }
 ```
 
 ### Service Frontiera (delega al client DG)
+
+Gli header PMR vengono propagati automaticamente da `RestClientHeadersFilter`: **non** passarli esplicitamente.
 
 ```java
 @ApplicationScoped
@@ -214,9 +211,8 @@ public class XxxService {
     @Inject @RestClient XxxDgClient client;
     @Inject ObjectMapper objectMapper;
 
-    public List<XxxDTO> getAll(String keyLogic, String transactionId,
-                                boolean modAsync, String processType) {
-        try (Response resp = client.getAll(keyLogic, transactionId, modAsync, processType)) {
+    public List<XxxDTO> getAll() {
+        try (Response resp = client.getAll()) {
             int status = resp.getStatus();
             if (status == 204) return List.of();
             if (status == 200) return readList(resp.readEntity(String.class));
@@ -326,18 +322,22 @@ public record XxxDTO(
 
 ### Client REST (solo Frontiera)
 
+Registrare sempre `@RegisterProvider(RestClientHeadersFilter.class)`: gli header PMR vengono
+iniettati automaticamente nel filtro. **Non** aggiungere `@HeaderParam` per gli header PMR.
+
 ```java
 @Produces(MediaType.APPLICATION_JSON)
 @RegisterRestClient(configKey = "<service-name>-dg-client")
+@RegisterProvider(RestClientHeadersFilter.class)
 public interface XxxDgClient {
     @GET @Path("/xxx")
-    Response getAll(
-        @HeaderParam(Constants.Headers.KEYLOGIC)       String keyLogic,
-        @HeaderParam(Constants.Headers.TRANSACTION_ID) String transactionId,
-        @HeaderParam(Constants.Headers.MOD_ASYNC)
-        @DefaultValue("false") boolean modAsync,
-        @HeaderParam(Constants.Headers.PROCESS_TYPE)   String processType
-    );
+    Response getAll();
+
+    @GET @Path("/xxx/{id}")
+    Response getById(@PathParam("id") Long id);
+
+    @POST @Path("/xxx")
+    Response save(XxxDTO dto);
 }
 ```
 
@@ -428,8 +428,9 @@ public interface XxxDgClient {
 ### Solo Frontiera
 - **NON** usare `@Transactional` (non c'è JPA)
 - **NON** usare `@Inject SecurityIdentity` direttamente nelle Resource: sicurezza gestita da `pmr-common-library` tramite `@AuthzRead`/`@AuthzWrite`
+- **NON** estrarre manualmente `kl/tid/modAsync/processType` dalla request nelle Resource: li legge `Utility` tramite `RequestHeadersContext`
 - **IN DEV** usare `%dev.security.authz.bypass=true` per testare i filter senza authorization service attivo
-- **SEMPRE** propagare i 4 header (kl, tid, modAsync, processType) nelle chiamate ai client
+- **SEMPRE** registrare `@RegisterProvider(RestClientHeadersFilter.class)` sull'interfaccia client: propaga automaticamente i 4 header PMR su tutte le chiamate in uscita
 - **SEMPRE** usare `try-with-resources` sui client REST (`try (Response resp = client.xxx()) { ... }`)
 
 ### Solo DataGateway
@@ -441,225 +442,44 @@ public interface XxxDgClient {
 - Il consumer Kafka deve usare `@Acknowledgment(Acknowledgment.Strategy.MANUAL)` e fare `message.ack()` anche in caso di errore
 
 
-### Solo microservizio (usa pmr-common-library di default)
-```bash
-python3 ./scaffold_quarkus.py \
-  --service-name  <nome-servizio> \
-  --base-package  <package.java.base> \
-  --output-dir    .
-```
-
-### Microservizio + libreria custom (generate e collegate automaticamente)
-```bash
-python3 ./scaffold_quarkus.py \
-  --service-name  <nome-servizio> \
-  --base-package  <package.java.base> \
-  --lib-name      <nome-libreria> \
-  --lib-package   <package.libreria> \
-  --output-dir    .
-```
-
-### Solo libreria
-```bash
-python3 ./scaffold_quarkus.py \
-  --lib-only \
-  --lib-name    <nome-libreria> \
-  --lib-package <package.libreria> \
-  --output-dir  .
-```
-
 ---
 
-## Stack tecnologico (immutabile)
+## Nuove classi di infrastruttura (Frontiera)
 
-| Tecnologia | Versione |
-|---|---|
-| Java | 21 |
-| Quarkus BOM | 3.9.2 |
-| Lombok | 1.18.32 |
-| MapStruct | 1.6.3 |
-| pmr-common-library | 1.0.0-SNAPSHOT |
+### RequestHeadersContext (`filter/`)
 
-### Dipendenze sempre presenti
-
-- `quarkus-rest` + `quarkus-rest-jackson` + `quarkus-rest-client-jackson`
-- `quarkus-hibernate-validator`
-- `quarkus-messaging-kafka` + `quarkus-smallrye-reactive-messaging-kafka`
-- `quarkus-redis-client` + `quarkus-cache`
-- `quarkus-oidc`
-- `quarkus-smallrye-health`
-- `quarkus-micrometer-registry-prometheus`
-- `quarkus-smallrye-openapi`
-- `quarkus-smallrye-fault-tolerance`
-- `quarkus-junit5-mockito` + `rest-assured` (scope test)
-
----
-
-## Struttura package obbligatoria
-
-```
-<basePackage>/
-├── config/       ApplicationConfig.java, OpenApiConfig.java
-├── filter/       MdcHeadersFilter.java, GlobalHeadersOpenApiFilter.java
-├── health/       ApplicationHealthCheck.java
-├── kafka/        KafkaGenericProducer.java, KafkaGenericConsumer.java
-├── service/      TopicService.java, <Entità>Service.java...
-├── resource/     <Entità>Resource.java...
-├── client/       <Entità>DgClient.java...
-├── dto/          <Entità>DTO.java...
-├── exception/    RemoteCallException.java, RetryableRemoteException.java
-├── response/     GenericResponse.java, ResponseStatus.java
-└── utils/        Constants.java, RequestCtx.java, Utility.java,
-                  JsonUtils.java, MessageTypeEnum.java
-```
-
----
-
-## Pattern obbligatori per le classi
-
-### Resource (Controller REST)
+Bean `@RequestScoped` che raccoglie gli header PMR e il timing di ogni richiesta.
+Viene popolato da `MdcHeadersFilter` all'ingresso e letto da `Utility`.
 
 ```java
-@Path("/")
-@Produces(MediaType.APPLICATION_JSON)
-@Consumes(MediaType.APPLICATION_JSON)
-@Blocking
-@LogPmr                              // dalla pmr-common-library
-public class XxxResource {
-
-    @Inject XxxService service;
-    @Context ContainerRequestContext ctx;
-
-    @GET
-    @AuthzRead                       // dalla pmr-common-library
-    @Path("/prefix_entita_operazione")
-    public Response metodoCrud() {
-        long   start       = System.nanoTime();
-        String kl          = RequestCtx.kl(ctx);
-        String tid         = RequestCtx.tid(ctx);
-        boolean modAsync   = RequestCtx.modAsync(ctx);
-        String processType = RequestCtx.processType(ctx);
-        final String path  = "/prefix_entita_operazione";
-
-        try {
-            // logica...
-            return Utility.okOrEmpty(list, path, kl, tid, modAsync, processType, start);
-        } catch (IllegalArgumentException e) {
-            return Utility.badRequest(e.getMessage(), path, kl, tid, modAsync, processType, start);
-        } catch (RemoteCallException e) {
-            return Utility.badGateway(e, path, kl, tid, modAsync, processType, start);
-        }
-    }
+@RequestScoped
+public class RequestHeadersContext {
+    private String keyLogic;
+    private String transactionId;
+    private boolean modAsync;
+    private String processType;
+    private String path;
+    private long startNanos;
+    // getters + setters
 }
 ```
 
-### Service
+### RestClientHeadersFilter (`filter/`)
 
-```java
-@ApplicationScoped
-public class XxxService {
-    @Inject @RestClient XxxDgClient client;
-    @Inject ObjectMapper objectMapper;
+`@Provider ClientRequestFilter` che inietta `RequestHeadersContext` e propaga
+automaticamente i 4 header PMR su **tutte** le chiamate REST client in uscita.
+Va registrato sull'interfaccia client con `@RegisterProvider(RestClientHeadersFilter.class)`.
 
-    public List<XxxDTO> getAll(String keyLogic, String transactionId,
-                                boolean modAsync, String processType) {
-        try (Response resp = client.getAll(keyLogic, transactionId, modAsync, processType)) {
-            int status = resp.getStatus();
-            if (status == 204) return List.of();
-            if (status == 200) return readList(resp.readEntity(String.class));
-            throw new RemoteCallException("Errore HTTP " + status);
-        }
-    }
-}
-```
+### RestApplication (`config/`)
 
-### Client REST
+`@ApplicationPath("/") extends Application` — necessario per il routing JAX-RS.
 
-```java
-@Produces(MediaType.APPLICATION_JSON)
-@RegisterRestClient(configKey = "<service-name>-dg-client")
-public interface XxxDgClient {
-    @GET @Path("/xxx")
-    Response getAll(
-        @HeaderParam(Constants.Headers.KEYLOGIC)       String keyLogic,
-        @HeaderParam(Constants.Headers.TRANSACTION_ID) String transactionId,
-        @HeaderParam(Constants.Headers.MOD_ASYNC)
-        @DefaultValue("false") boolean modAsync,
-        @HeaderParam(Constants.Headers.PROCESS_TYPE)   String processType
-    );
-}
-```
+### Utility (refactoring in `@ApplicationScoped` bean)
 
-### DTO
-
-```java
-@Data @NoArgsConstructor @AllArgsConstructor @Builder
-@JsonInclude(JsonInclude.Include.NON_NULL)
-@Schema(name = "XxxDTO", description = "...")
-public class XxxDTO {
-    private Long id;
-    // campi...
-}
-```
+`Utility` è ora un **bean CDI** (`@ApplicationScoped`) che inietta `RequestHeadersContext`.
+Tutti i metodi di risposta (`ok`, `okOrEmpty`, `badRequest`, `badGateway`, ecc.) sono
+**metodi di istanza** senza parametri di contesto — leggono automaticamente da `RequestHeadersContext`.
+Iniettarlo nelle Resource con `@Inject Utility utility` invece di chiamare metodi statici.
 
 ---
 
-## Headers HTTP obbligatori (sempre propagati)
-
-| Header | Costante | Descrizione |
-|---|---|---|
-| `keyLogic` | `Constants.Headers.KEYLOGIC` | Chiave correlazione tecnica |
-| `transactionId` | `Constants.Headers.TRANSACTION_ID` | ID transazione |
-| `modAsync` | `Constants.Headers.MOD_ASYNC` | Modalità asincrona (default: false) |
-| `processType` | `Constants.Headers.PROCESS_TYPE` | Tipo processo (GUI/FLUSSO/N/A) |
-
----
-
-## Regole di naming
-
-| Elemento | Convenzione | Esempio |
-|---|---|---|
-| Service name | kebab-case | `gestione-contratti` |
-| Package | tutto minuscolo, no trattini | `it.eng.snam.pmr.gestionecontratti` |
-| Classi | PascalCase + suffisso | `GestioneContrattiService` |
-| Path REST | `prefix_entita_operazione` | `/gc_contratti_getall` |
-| Client config key | `<service-name>-dg-client` | `gestione-contratti-dg-client` |
-| Topic Kafka | `pmr-<nomebreve>` | `pmr-gestionecontratti` |
-
----
-
-## application.properties: sezioni obbligatorie
-
-Ogni microservizio deve avere configurate:
-1. `quarkus.application.name` / `quarkus.http.port`
-2. Logging con MDC pattern (API, TN, KL, MK, PT)
-3. Redis (`quarkus.redis.hosts`)
-4. Kafka producer (`mp.messaging.outgoing.kafka-out.*`)
-5. Security HTTP policy (`quarkus.http.auth.permission.*`) + OIDC disabilitato
-6. Health + Metrics + OpenAPI
-7. Client REST (`<service>-dg-client/mp-rest/url`)
-8. Profilo `%dev` con security.authz.bypass e Kafka PLAINTEXT
-
----
-
-## Quando l'utente chiede di aggiungere una nuova entità
-
-1. Crea `<Entita>DTO.java` in `dto/`
-2. Crea `<Entita>DgClient.java` in `client/` con il `configKey` del servizio DG
-3. Crea `<Entita>Service.java` in `service/` con pattern try-with-resources su Response
-4. Crea `<Entita>Resource.java` in `resource/` con `@AuthzRead`/`@AuthzWrite`, `@LogPmr`, `@Blocking`
-5. Aggiungi il topic Kafka in `Constants.Topic` se necessario
-6. Aggiorna `application.properties` se il client punta a un servizio diverso
-
----
-
-## Regole importanti
-
-- **NON** usare `@Transactional` (non c'è JPA nel progetto)
-- **NON** usare `@Inject SecurityIdentity` direttamente nelle Resource: la sicurezza è gestita dalla `pmr-common-library` tramite `@AuthzRead`/`@AuthzWrite`
-- **IN DEV** usare `%dev.security.authz.bypass=true` per testare i filter senza authorization service attivo
-- **SEMPRE** usare `@Blocking` nelle Resource (il progetto usa Quarkus REST reattivo)
-- **SEMPRE** usare `Utility.*` per costruire le Response (mai `Response.ok()` diretto)
-- **SEMPRE** propagare i 4 header (kl, tid, modAsync, processType) nelle chiamate ai client
-- **SEMPRE** usare `try-with-resources` sui client REST (`try (Response resp = client.xxx()) { ... }`)
-- Logger: usare `org.jboss.logging.Logger` nelle Resource/Service, `org.slf4j.Logger` in TopicService
