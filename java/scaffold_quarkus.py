@@ -371,6 +371,7 @@ public interface Constants {{
         String API = "API";
         String MK = "MK";
         String PT = "PT";
+        String MA = "MA";
     }}
 
     interface MEDIATYPE {{
@@ -429,14 +430,21 @@ import java.util.Optional;
 import java.util.UUID;
 
 import {pkg}.exception.RemoteCallException;
+import {pkg}.filter.RequestHeadersContext;
 import {pkg}.response.GenericResponse;
 import {pkg}.response.GenericResponse.Message;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 import jakarta.ws.rs.core.Response;
 
+@ApplicationScoped
 public class Utility {{
 
+    @Inject
+    RequestHeadersContext headersCtx;
+
     // =========================
-    // Helpers
+    // Static helpers
     // =========================
 
     public static String defaultUuidIfBlank(String v) {{
@@ -449,21 +457,46 @@ public class Utility {{
     public static String defaultIfBlank(String v, String def) {{
         return (v == null || v.trim().isEmpty()) ? def : v;
     }}
+    public static long elapsedMs(long s) {{ return (System.nanoTime() - s) / 1_000_000; }}
+    public static String safe(Object v) {{
+        if (v == null) return "null";
+        String s = String.valueOf(v).trim();
+        if (s.isEmpty()) return "blank";
+        return s.length() > 120 ? s.substring(0, 120) + "..." : s;
+    }}
+
+    // =========================
+    // Context helpers
+    // =========================
+
+    private String currentPath() {{
+        String p = (headersCtx != null) ? headersCtx.getPath() : null;
+        return (p == null || p.isBlank()) ? "N/A" : p;
+    }}
+
+    private long startNanos() {{
+        long s = (headersCtx != null) ? headersCtx.getStartNanos() : 0L;
+        return (s > 0L) ? s : System.nanoTime();
+    }}
+
+    private String executionTime() {{
+        return Duration.ofNanos(System.nanoTime() - startNanos()).toMillis() + "ms";
+    }}
 
     // =========================
     // Common headers
     // =========================
 
-    public static Response.ResponseBuilder withCommonHeaders(Response.ResponseBuilder rb,
-            String kl, String tid, boolean modAsync, String pt) {{
-        return rb.header(Constants.Headers.KEYLOGIC, kl)
-                 .header(Constants.Headers.TRANSACTION_ID, tid)
-                 .header(Constants.Headers.MOD_ASYNC, String.valueOf(modAsync))
-                 .header(Constants.Headers.PROCESS_TYPE, pt);
+    private Response.ResponseBuilder withCommonHeaders(Response.ResponseBuilder rb) {{
+        return rb
+            .header(Constants.Headers.KEYLOGIC,       headersCtx.getKeyLogic())
+            .header(Constants.Headers.TRANSACTION_ID, headersCtx.getTransactionId())
+            .header(Constants.Headers.MOD_ASYNC,      String.valueOf(headersCtx.isModAsync()))
+            .header(Constants.Headers.PROCESS_TYPE,   headersCtx.getProcessType());
     }}
 
     // =========================
-    // Internal builders
+    // Internal builder
     // =========================
 
     private static <T> GenericResponse<T> baseGeneric(String path) {{
@@ -472,95 +505,131 @@ public class Utility {{
         gr.setPath(path);
         return gr;
     }}
-    private static String fmtNanos(long s) {{
-        return Duration.ofNanos(System.nanoTime() - s).toMillis() + "ms";
-    }}
 
     // =========================
-    // Success responses
+    // 200 OK
     // =========================
 
-    public static <T> Response ok(T data, String path, String kl, String tid, boolean ma, String pt, long s) {{
-        GenericResponse<T> gr = baseGeneric(path); gr.setData(data); gr.setExecutionTime(fmtNanos(s));
+    public <T> Response ok(T data) {{
+        String path = currentPath();
+        GenericResponse<T> gr = baseGeneric(path);
+        gr.setData(data);
+        gr.setExecutionTime(executionTime());
         if (data instanceof List<?> l) gr.setNumberOfElements(l.size());
-        return withCommonHeaders(Response.ok(gr), kl, tid, ma, pt).build();
+        return withCommonHeaders(Response.ok(gr)).build();
     }}
-    public static <T> Response okWithMessageCustom(T data, Message msg, String path, String kl, String tid, boolean ma, String pt, long s) {{
-        GenericResponse<T> gr = baseGeneric(path); gr.setData(data); gr.setExecutionTime(fmtNanos(s)); gr.setMessage(msg);
+
+    public <T> Response okWithMessageCustom(T data, Message msg) {{
+        String path = currentPath();
+        GenericResponse<T> gr = baseGeneric(path);
+        gr.setData(data);
+        gr.setExecutionTime(executionTime());
+        gr.setMessage(msg);
         if (data instanceof List<?> l) gr.setNumberOfElements(l.size());
-        return withCommonHeaders(Response.ok(gr), kl, tid, ma, pt).build();
+        return withCommonHeaders(Response.ok(gr)).build();
     }}
-    public static <T> Response okEmpty(String path, String kl, String tid, boolean ma, String pt, long s) {{
-        GenericResponse<T> gr = baseGeneric(path); gr.setExecutionTime(fmtNanos(s)); gr.setNumberOfElements(0);
-        return withCommonHeaders(Response.ok(gr), kl, tid, ma, pt).build();
-    }}
-    public static <T> Response created(T data, String path, String kl, String tid, boolean ma, String pt, long s) {{
-        GenericResponse<T> gr = baseGeneric(path); gr.setData(data); gr.setExecutionTime(fmtNanos(s));
-        if (data instanceof List<?> l) gr.setNumberOfElements(l.size());
-        return withCommonHeaders(Response.status(Response.Status.CREATED).entity(gr), kl, tid, ma, pt).build();
-    }}
-    public static Response noContentOnlyHeaders(String kl, String tid, boolean ma, String pt) {{
-        return withCommonHeaders(Response.noContent(), kl, tid, ma, pt).build();
+
+    public <T> Response okEmpty() {{
+        String path = currentPath();
+        GenericResponse<T> gr = baseGeneric(path);
+        gr.setExecutionTime(executionTime());
+        gr.setNumberOfElements(0);
+        return withCommonHeaders(Response.ok(gr)).build();
     }}
 
     // =========================
-    // Error responses
+    // 201 CREATED
     // =========================
 
-    public static <T> Response notFound(String msg, String path, String kl, String tid, boolean ma, String pt, long s) {{
-        GenericResponse<T> gr = baseGeneric(path); gr.setExecutionTime(fmtNanos(s));
-        Message m = new Message(); m.setMessageType("ERROR"); m.setMessageCode("NOT_FOUND"); m.setMessageDescription(msg); gr.setMessage(m);
-        return withCommonHeaders(Response.status(Response.Status.NOT_FOUND).entity(gr), kl, tid, ma, pt).build();
+    public <T> Response created(T data) {{
+        String path = currentPath();
+        GenericResponse<T> gr = baseGeneric(path);
+        gr.setData(data);
+        gr.setExecutionTime(executionTime());
+        if (data instanceof List<?> l) gr.setNumberOfElements(l.size());
+        return withCommonHeaders(Response.status(Response.Status.CREATED).entity(gr)).build();
     }}
-    public static <T> Response notFoundWithMessageCustom(Message message, String path, String kl, String tid, boolean ma, String pt, long s) {{
-        GenericResponse<T> gr = baseGeneric(path); gr.setExecutionTime(fmtNanos(s)); gr.setMessage(message);
-        return withCommonHeaders(Response.status(Response.Status.NOT_FOUND).entity(gr), kl, tid, ma, pt).build();
+
+    // =========================
+    // 404 NOT FOUND
+    // =========================
+
+    public <T> Response notFound(String message) {{
+        String path = currentPath();
+        GenericResponse<T> gr = baseGeneric(path);
+        gr.setExecutionTime(executionTime());
+        Message m = new Message();
+        m.setMessageType("ERROR"); m.setMessageCode("NOT_FOUND"); m.setMessageDescription(message);
+        gr.setMessage(m);
+        return withCommonHeaders(Response.status(Response.Status.NOT_FOUND).entity(gr)).build();
     }}
-    public static <T> Response badRequest(String msg, String path, String kl, String tid, boolean ma, String pt, long s) {{
-        GenericResponse<T> gr = baseGeneric(path); gr.setExecutionTime(fmtNanos(s));
-        Message m = new Message(); m.setMessageType("ERROR"); m.setMessageCode("BAD_REQUEST"); m.setMessageDescription(msg); gr.setMessage(m);
-        return withCommonHeaders(Response.status(Response.Status.BAD_REQUEST).entity(gr), kl, tid, ma, pt).build();
+
+    public <T> Response notFoundWithMessageCustom(Message message) {{
+        String path = currentPath();
+        GenericResponse<T> gr = baseGeneric(path);
+        gr.setExecutionTime(executionTime());
+        gr.setMessage(message);
+        return withCommonHeaders(Response.status(Response.Status.NOT_FOUND).entity(gr)).build();
     }}
-    public static <T> Response badGateway(RemoteCallException e, String path, String kl, String tid, boolean ma, String pt, long s) {{
-        GenericResponse<T> gr = baseGeneric(path); gr.setExecutionTime(fmtNanos(s));
-        Message m = new Message(); m.setMessageType("ERROR"); m.setMessageCode("BAD_GATEWAY"); m.setMessageDescription(e.getMessage()); gr.setMessage(m);
-        return withCommonHeaders(Response.status(Response.Status.BAD_GATEWAY).entity(gr), kl, tid, ma, pt).build();
+
+    // =========================
+    // 400 BAD REQUEST
+    // =========================
+
+    public <T> Response badRequest(String message) {{
+        String path = currentPath();
+        GenericResponse<T> gr = baseGeneric(path);
+        gr.setExecutionTime(executionTime());
+        Message m = new Message();
+        m.setMessageType("ERROR"); m.setMessageCode("BAD_REQUEST"); m.setMessageDescription(message);
+        gr.setMessage(m);
+        return withCommonHeaders(Response.status(Response.Status.BAD_REQUEST).entity(gr)).build();
+    }}
+
+    // =========================
+    // 502 BAD GATEWAY
+    // =========================
+
+    public <T> Response badGateway(RemoteCallException e) {{
+        String path = currentPath();
+        GenericResponse<T> gr = baseGeneric(path);
+        gr.setExecutionTime(executionTime());
+        Message m = new Message();
+        m.setMessageType("ERROR"); m.setMessageCode("BAD_GATEWAY"); m.setMessageDescription(e.getMessage());
+        gr.setMessage(m);
+        return withCommonHeaders(Response.status(Response.Status.BAD_GATEWAY).entity(gr)).build();
+    }}
+
+    // =========================
+    // 204 NO CONTENT
+    // =========================
+
+    public Response noContentOnlyHeaders() {{
+        return withCommonHeaders(Response.noContent()).build();
     }}
 
     // =========================
     // Helper: Optional & List
     // =========================
 
-    public static <T> Response okOrNotFound(Optional<T> opt, String notFoundMsg, String path,
-            String kl, String tid, boolean ma, String pt, long s) {{
-        if (opt == null || opt.isEmpty()) return notFound(notFoundMsg, path, kl, tid, ma, pt, s);
-        return ok(opt.get(), path, kl, tid, ma, pt, s);
-    }}
-    public static <T> Response okOrNotFoundWithCustomMessage(Optional<T> opt, String path,
-            String kl, String tid, boolean ma, String pt, long s, Message customMessage) {{
-        if (opt == null || opt.isEmpty()) return notFoundWithMessageCustom(customMessage, path, kl, tid, ma, pt, s);
-        return okWithMessageCustom(opt.get(), customMessage, path, kl, tid, ma, pt, s);
-    }}
-    public static <T> Response okOrEmpty(List<T> list, String path, String kl, String tid, boolean ma, String pt, long s) {{
-        if (list == null || list.isEmpty()) return okEmpty(path, kl, tid, ma, pt, s);
-        return ok(list, path, kl, tid, ma, pt, s);
-    }}
-    public static <T> Response okOrEmptyWithCustoMessage(List<T> list, String path,
-            String kl, String tid, boolean ma, String pt, long s, Message customMessage) {{
-        if (list == null || list.isEmpty()) return okEmpty(path, kl, tid, ma, pt, s);
-        return okWithMessageCustom(list, customMessage, path, kl, tid, ma, pt, s);
+    public <T> Response okOrNotFound(Optional<T> opt, String notFoundMessage) {{
+        if (opt == null || opt.isEmpty()) return notFound(notFoundMessage);
+        return ok(opt.get());
     }}
 
-    // =========================
-    // Logging helpers
-    // =========================
+    public <T> Response okOrNotFoundWithCustomMessage(Optional<T> opt, Message customMessage) {{
+        if (opt == null || opt.isEmpty()) return notFoundWithMessageCustom(customMessage);
+        return okWithMessageCustom(opt.get(), customMessage);
+    }}
 
-    public static long elapsedMs(long s) {{ return (System.nanoTime() - s) / 1_000_000; }}
-    public static String safe(Object v) {{
-        if (v == null) return "null";
-        String s = String.valueOf(v).trim();
-        if (s.isEmpty()) return "blank";
-        return s.length() > 120 ? s.substring(0, 120) + "..." : s;
+    public <T> Response okOrEmpty(List<T> list) {{
+        if (list == null || list.isEmpty()) return okEmpty();
+        return ok(list);
+    }}
+
+    public <T> Response okOrEmptyWithCustomMessage(List<T> list, Message customMessage) {{
+        if (list == null || list.isEmpty()) return okEmpty();
+        return okWithMessageCustom(list, customMessage);
     }}
 }}
 """
@@ -602,6 +671,83 @@ public class JsonUtils {{
     public static <T> T getObject(TypeReference<T> ref, String value) throws IOException {{
         return (value != null && !value.trim().isEmpty()) ? mapper.readValue(value, ref) : null;
     }}
+}}
+"""
+
+
+def gen_request_headers_context(pkg):
+    return f"""\
+package {pkg}.filter;
+
+import jakarta.enterprise.context.RequestScoped;
+
+@RequestScoped
+public class RequestHeadersContext {{
+
+    private String keyLogic;
+    private String transactionId;
+    private boolean modAsync;
+    private String processType;
+    private String path;
+    private long startNanos;
+
+    public String getKeyLogic() {{ return keyLogic; }}
+    public void setKeyLogic(String keyLogic) {{ this.keyLogic = keyLogic; }}
+
+    public String getTransactionId() {{ return transactionId; }}
+    public void setTransactionId(String transactionId) {{ this.transactionId = transactionId; }}
+
+    public boolean isModAsync() {{ return modAsync; }}
+    public void setModAsync(boolean modAsync) {{ this.modAsync = modAsync; }}
+
+    public String getProcessType() {{ return processType; }}
+    public void setProcessType(String processType) {{ this.processType = processType; }}
+
+    public String getPath() {{ return path; }}
+    public void setPath(String path) {{ this.path = path; }}
+
+    public long getStartNanos() {{ return startNanos; }}
+    public void setStartNanos(long startNanos) {{ this.startNanos = startNanos; }}
+}}
+"""
+
+
+def gen_rest_client_headers_filter(pkg):
+    return f"""\
+package {pkg}.filter;
+
+import {pkg}.utils.Constants;
+import jakarta.inject.Inject;
+import jakarta.ws.rs.client.ClientRequestContext;
+import jakarta.ws.rs.client.ClientRequestFilter;
+import jakarta.ws.rs.ext.Provider;
+
+@Provider
+public class RestClientHeadersFilter implements ClientRequestFilter {{
+
+    @Inject
+    RequestHeadersContext ctx;
+
+    @Override
+    public void filter(ClientRequestContext requestContext) {{
+        requestContext.getHeaders().putSingle(Constants.Headers.KEYLOGIC,       ctx.getKeyLogic());
+        requestContext.getHeaders().putSingle(Constants.Headers.TRANSACTION_ID, ctx.getTransactionId());
+        requestContext.getHeaders().putSingle(Constants.Headers.MOD_ASYNC,      String.valueOf(ctx.isModAsync()));
+        requestContext.getHeaders().putSingle(Constants.Headers.PROCESS_TYPE,   ctx.getProcessType());
+    }}
+}}
+"""
+
+
+def gen_rest_application(pkg):
+    return f"""\
+package {pkg}.config;
+
+import jakarta.ws.rs.ApplicationPath;
+import jakarta.ws.rs.core.Application;
+
+@ApplicationPath("/")
+public class RestApplication extends Application {{
 }}
 """
 
@@ -762,6 +908,7 @@ import org.jboss.logging.MDC;
 import {pkg}.utils.Constants;
 import {pkg}.utils.Utility;
 import jakarta.annotation.Priority;
+import jakarta.inject.Inject;
 import jakarta.ws.rs.Priorities;
 import jakarta.ws.rs.container.*;
 import jakarta.ws.rs.core.MultivaluedMap;
@@ -776,8 +923,14 @@ public class MdcHeadersFilter implements ContainerRequestFilter, ContainerRespon
     public static final String PROP_MOD_ASYNC    = "CTX_MOD_ASYNC";
     public static final String PROP_PROCESS_TYPE = "CTX_PROCESS_TYPE";
 
+    @Inject
+    RequestHeadersContext requestHeadersContext;
+
     @Override
     public void filter(ContainerRequestContext req) {{
+        requestHeadersContext.setStartNanos(System.nanoTime());
+        requestHeadersContext.setPath("/" + req.getUriInfo().getPath());
+
         String kl  = Utility.defaultUuidIfBlank(req.getHeaderString(Constants.Headers.KEYLOGIC));
         String tid = Utility.defaultUuidIfBlank(req.getHeaderString(Constants.Headers.TRANSACTION_ID));
         boolean ma = Utility.parseBooleanOrDefault(req.getHeaderString(Constants.Headers.MOD_ASYNC), false);
@@ -792,18 +945,31 @@ public class MdcHeadersFilter implements ContainerRequestFilter, ContainerRespon
         req.setProperty(PROP_KL, kl); req.setProperty(PROP_TID, tid);
         req.setProperty(PROP_MOD_ASYNC, ma); req.setProperty(PROP_PROCESS_TYPE, pt);
 
-        MDC.put(Constants.LogParams.KL, kl); MDC.put(Constants.LogParams.TN, tid);
-        MDC.put(Constants.LogParams.PT, pt);
+        MDC.put(Constants.LogParams.KL,  kl);
+        MDC.put(Constants.LogParams.TN,  tid);
+        MDC.put(Constants.LogParams.PT,  pt);
+        MDC.put(Constants.LogParams.MA,  String.valueOf(ma));
         MDC.put(Constants.LogParams.API, req.getMethod() + " /" + req.getUriInfo().getPath());
+
+        requestHeadersContext.setKeyLogic(kl);
+        requestHeadersContext.setTransactionId(tid);
+        requestHeadersContext.setModAsync(ma);
+        requestHeadersContext.setProcessType(pt);
     }}
 
     @Override
     public void filter(ContainerRequestContext req, ContainerResponseContext resp) {{
         try {{
-            resp.getHeaders().putSingle(Constants.Headers.KEYLOGIC,       req.getProperty(PROP_KL));
-            resp.getHeaders().putSingle(Constants.Headers.TRANSACTION_ID, req.getProperty(PROP_TID));
-            resp.getHeaders().putSingle(Constants.Headers.MOD_ASYNC,      String.valueOf(req.getProperty(PROP_MOD_ASYNC) instanceof Boolean b && b));
-            resp.getHeaders().putSingle(Constants.Headers.PROCESS_TYPE,   req.getProperty(PROP_PROCESS_TYPE));
+            String kl  = (String) req.getProperty(PROP_KL);
+            String tid = (String) req.getProperty(PROP_TID);
+            Object maObj = req.getProperty(PROP_MOD_ASYNC);
+            boolean ma = (maObj instanceof Boolean b) ? b : false;
+            String pt  = (String) req.getProperty(PROP_PROCESS_TYPE);
+
+            resp.getHeaders().putSingle(Constants.Headers.KEYLOGIC,       kl);
+            resp.getHeaders().putSingle(Constants.Headers.TRANSACTION_ID, tid);
+            resp.getHeaders().putSingle(Constants.Headers.MOD_ASYNC,      String.valueOf(ma));
+            resp.getHeaders().putSingle(Constants.Headers.PROCESS_TYPE,   pt);
         }} finally {{ MDC.clear(); }}
     }}
 
@@ -889,19 +1055,29 @@ package {pkg}.config;
 
 import org.eclipse.microprofile.openapi.annotations.OpenAPIDefinition;
 import org.eclipse.microprofile.openapi.annotations.enums.ParameterIn;
+import org.eclipse.microprofile.openapi.annotations.enums.SecuritySchemeType;
 import org.eclipse.microprofile.openapi.annotations.info.Info;
 import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;
+import org.eclipse.microprofile.openapi.annotations.security.SecurityRequirement;
+import org.eclipse.microprofile.openapi.annotations.security.SecurityScheme;
 import org.eclipse.microprofile.openapi.annotations.servers.Server;
 
 @OpenAPIDefinition(
     info = @Info(title = "{title}", version = "1.0"),
     servers = @Server(url = "/"),
+    security = @SecurityRequirement(name = "bearerAuth"),
     components = @org.eclipse.microprofile.openapi.annotations.Components(parameters = {{
-        @Parameter(name = "keyLogic",      in = ParameterIn.HEADER, description = "Chiave di correlazione tecnica", required = false),
-        @Parameter(name = "transactionId", in = ParameterIn.HEADER, description = "Transaction id tecnico",         required = false),
-        @Parameter(name = "modAsync",      in = ParameterIn.HEADER, description = "Modalità asincrona",             required = false),
-        @Parameter(name = "processType",   in = ParameterIn.HEADER, description = "Tipo processo (GUI | FLUSSO | N/A)", required = false)
+        @Parameter(name = "keyLogic",      in = ParameterIn.HEADER, description = "Chiave di correlazione tecnica",       required = false),
+        @Parameter(name = "transactionId", in = ParameterIn.HEADER, description = "Transaction id tecnico",               required = false),
+        @Parameter(name = "modAsync",      in = ParameterIn.HEADER, description = "Modalità asincrona",                   required = false),
+        @Parameter(name = "processType",   in = ParameterIn.HEADER, description = "Tipo processo (GUI | FLUSSO | N/A)",   required = false)
     }})
+)
+@SecurityScheme(
+    securitySchemeName = "bearerAuth",
+    type = SecuritySchemeType.HTTP,
+    scheme = "bearer",
+    bearerFormat = "JWT"
 )
 public class OpenApiConfig {{}}
 """
@@ -1078,38 +1254,27 @@ def gen_sample_client(pkg, sn):
     return f"""\
 package {pkg}.client;
 
+import org.eclipse.microprofile.rest.client.annotation.RegisterProvider;
 import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
 import {pkg}.dto.SampleDTO;
-import {pkg}.utils.Constants;
+import {pkg}.filter.RestClientHeadersFilter;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
 @Produces(MediaType.APPLICATION_JSON)
 @RegisterRestClient(configKey = "{client_key}")
+@RegisterProvider(RestClientHeadersFilter.class)
 public interface SampleDgClient {{
-    @GET  @Path("/sample")
-    Response getAll(
-        @HeaderParam(Constants.Headers.KEYLOGIC)       String keyLogic,
-        @HeaderParam(Constants.Headers.TRANSACTION_ID) String transactionId,
-        @HeaderParam(Constants.Headers.MOD_ASYNC) @DefaultValue("false") boolean modAsync,
-        @HeaderParam(Constants.Headers.PROCESS_TYPE)   String processType);
 
-    @GET  @Path("/sample/{{id}}")
-    Response getById(
-        @PathParam("id") Long id,
-        @HeaderParam(Constants.Headers.KEYLOGIC)       String keyLogic,
-        @HeaderParam(Constants.Headers.TRANSACTION_ID) String transactionId,
-        @HeaderParam(Constants.Headers.MOD_ASYNC) @DefaultValue("false") boolean modAsync,
-        @HeaderParam(Constants.Headers.PROCESS_TYPE)   String processType);
+    @GET @Path("/sample")
+    Response getAll();
+
+    @GET @Path("/sample/{{id}}")
+    Response getById(@PathParam("id") Long id);
 
     @POST @Path("/sample/save")
-    Response save(
-        SampleDTO dto,
-        @HeaderParam(Constants.Headers.KEYLOGIC)       String keyLogic,
-        @HeaderParam(Constants.Headers.TRANSACTION_ID) String transactionId,
-        @HeaderParam(Constants.Headers.MOD_ASYNC) @DefaultValue("false") boolean modAsync,
-        @HeaderParam(Constants.Headers.PROCESS_TYPE)   String processType);
+    Response save(SampleDTO dto);
 }}
 """
 
@@ -1121,7 +1286,6 @@ package {pkg}.service;
 
 import java.util.List;
 import java.util.Optional;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 import org.jboss.logging.Logger;
 import org.jboss.resteasy.reactive.ClientWebApplicationException;
@@ -1136,10 +1300,12 @@ import {lib_pkg}.util.CacheUtils;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.core.Response;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 @ApplicationScoped
 public class SampleService {{
     private static final Logger LOG = Logger.getLogger(SampleService.class);
+
     @Inject @RestClient SampleDgClient client;
     @Inject ObjectMapper objectMapper;
     @Inject CacheUtils cacheUtils;
@@ -1147,14 +1313,14 @@ public class SampleService {{
     @ConfigProperty(name = "cache.{domain}.sample.ttl-seconds", defaultValue = "300")
     int cacheGetAllTtlSeconds;
 
-    public List<SampleDTO> getAll(String kl, String tid, boolean ma, String pt) {{
+    public List<SampleDTO> getAll() {{
         String cacheKey = cacheUtils.key("{domain}", "sample", "getall");
         return cacheUtils.getOrCompute(
             cacheKey,
             new TypeReference<List<SampleDTO>>() {{}},
             cacheGetAllTtlSeconds,
             () -> {{
-                try (Response r = client.getAll(kl, tid, ma, pt)) {{
+                try (Response r = client.getAll()) {{
                     if (r.getStatus() == 204) return List.of();
                     if (r.getStatus() == 200) return readList(r.readEntity(String.class));
                     throw new RemoteCallException("Errore getAll Sample: HTTP " + r.getStatus());
@@ -1163,8 +1329,8 @@ public class SampleService {{
         );
     }}
 
-    public CustomResponse<Optional<SampleDTO>> getById(Long id, String kl, String tid, boolean ma, String pt) {{
-        try (Response r = client.getById(id, kl, tid, ma, pt)) {{
+    public CustomResponse<Optional<SampleDTO>> getById(Long id) {{
+        try (Response r = client.getById(id)) {{
             int status = r.getStatus();
             if (status == 200) {{
                 SampleDTO dto = r.readEntity(SampleDTO.class);
@@ -1189,8 +1355,8 @@ public class SampleService {{
         }}
     }}
 
-    public SampleDTO save(SampleDTO dto, String kl, String tid, boolean ma, String pt) {{
-        try (Response r = client.save(dto, kl, tid, ma, pt)) {{
+    public SampleDTO save(SampleDTO dto) {{
+        try (Response r = client.save(dto)) {{
             if (r.getStatus() == 200 || r.getStatus() == 201) return r.readEntity(SampleDTO.class);
             throw new RemoteCallException("Errore save Sample: HTTP " + r.getStatus());
         }}
@@ -1218,7 +1384,6 @@ import {pkg}.dto.SampleDTO;
 import {pkg}.exception.RemoteCallException;
 import {pkg}.response.CustomResponse;
 import {pkg}.service.SampleService;
-import {pkg}.utils.RequestCtx;
 import {pkg}.utils.Utility;
 import {lib_pkg}.annotation.AuthzRead;
 import {lib_pkg}.annotation.AuthzWrite;
@@ -1226,8 +1391,6 @@ import {lib_pkg}.annotation.LogPmr;
 import jakarta.inject.Inject;
 import jakarta.validation.Valid;
 import jakarta.ws.rs.*;
-import jakarta.ws.rs.container.ContainerRequestContext;
-import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
@@ -1238,41 +1401,40 @@ import jakarta.ws.rs.core.Response;
 @LogPmr
 public class SampleResource {{
     private static final Logger LOG = Logger.getLogger(SampleResource.class);
+
     @Inject SampleService service;
-    @Context ContainerRequestContext ctx;
+    @Inject Utility utility;
 
     @GET @AuthzRead @Path("/{prefix}_sample_getall")
     public Response getAll() {{
-        long s=System.nanoTime(); String kl=RequestCtx.kl(ctx),tid=RequestCtx.tid(ctx); boolean ma=RequestCtx.modAsync(ctx); String pt=RequestCtx.processType(ctx);
-        final String path="/{prefix}_sample_getall";
-        try {{ List<SampleDTO> list=service.getAll(kl,tid,ma,pt); return Utility.okOrEmpty(list,path,kl,tid,ma,pt,s); }}
-        catch (IllegalArgumentException e) {{ return Utility.badRequest(e.getMessage(),path,kl,tid,ma,pt,s); }}
-        catch (RemoteCallException e)      {{ return Utility.badGateway(e,path,kl,tid,ma,pt,s); }}
+        try {{
+            List<SampleDTO> list = service.getAll();
+            return utility.okOrEmpty(list);
+        }}
+        catch (IllegalArgumentException e) {{ return utility.badRequest(e.getMessage()); }}
+        catch (RemoteCallException e)      {{ return utility.badGateway(e); }}
     }}
 
     @GET @AuthzRead @Path("/{prefix}_sample_getbyid")
     public Response getById(@QueryParam("id") Long id) {{
-        long s=System.nanoTime(); String kl=RequestCtx.kl(ctx),tid=RequestCtx.tid(ctx); boolean ma=RequestCtx.modAsync(ctx); String pt=RequestCtx.processType(ctx);
-        final String path="/{prefix}_sample_getbyid";
-        if (id==null) return Utility.badRequest("id obbligatorio",path,kl,tid,ma,pt,s);
+        if (id == null) return utility.badRequest("id obbligatorio");
         try {{
-            CustomResponse<Optional<SampleDTO>> cr = service.getById(id,kl,tid,ma,pt);
-            return Utility.okOrNotFoundWithCustomMessage(
-                cr.getResponseData(),
-                path, kl, tid, ma, pt, s, cr.getMessage()
-            );
+            CustomResponse<Optional<SampleDTO>> cr = service.getById(id);
+            return utility.okOrNotFoundWithCustomMessage(cr.getResponseData(), cr.getMessage());
         }}
-        catch (IllegalArgumentException e) {{ return Utility.badRequest(e.getMessage(),path,kl,tid,ma,pt,s); }}
-        catch (RemoteCallException e)      {{ return Utility.badGateway(e,path,kl,tid,ma,pt,s); }}
+        catch (IllegalArgumentException e) {{ return utility.badRequest(e.getMessage()); }}
+        catch (RemoteCallException e)      {{ return utility.badGateway(e); }}
     }}
 
     @POST @AuthzWrite @Path("/{prefix}_sample_save")
     public Response save(@Valid SampleDTO dto) {{
-        long s=System.nanoTime(); String kl=RequestCtx.kl(ctx),tid=RequestCtx.tid(ctx); boolean ma=RequestCtx.modAsync(ctx); String pt=RequestCtx.processType(ctx);
-        final String path="/{prefix}_sample_save";
-        try {{ SampleDTO saved=service.save(dto,kl,tid,ma,pt); return Utility.created(saved,path,kl,tid,ma,pt,s); }}
-        catch (IllegalArgumentException e) {{ return Utility.badRequest(e.getMessage(),path,kl,tid,ma,pt,s); }}
-        catch (RemoteCallException e)      {{ return Utility.badGateway(e,path,kl,tid,ma,pt,s); }}
+        if (dto == null) return utility.badRequest("Body mancante o non valido");
+        try {{
+            SampleDTO saved = service.save(dto);
+            return utility.created(saved);
+        }}
+        catch (IllegalArgumentException e) {{ return utility.badRequest(e.getMessage()); }}
+        catch (RemoteCallException e)      {{ return utility.badGateway(e); }}
     }}
 }}
 """
@@ -1703,6 +1865,7 @@ public interface Constants {{
         String API = "API";
         String MK = "MK";
         String PT = "PT";
+        String MA = "MA";
     }}
 
     interface MEDIATYPE {{
@@ -2044,20 +2207,10 @@ import java.util.Optional;
 import io.smallrye.common.annotation.Blocking;
 import {pkg}.dto.{cls}DTO;
 import {pkg}.service.{cls}Service;
-import {pkg}.utils.RequestCtx;
 import {pkg}.utils.Utility;
 import {lib_pkg}.annotation.LogPmr;
 import jakarta.inject.Inject;
-import jakarta.ws.rs.Consumes;
-import jakarta.ws.rs.DefaultValue;
-import jakarta.ws.rs.GET;
-import jakarta.ws.rs.POST;
-import jakarta.ws.rs.Path;
-import jakarta.ws.rs.PathParam;
-import jakarta.ws.rs.Produces;
-import jakarta.ws.rs.QueryParam;
-import jakarta.ws.rs.container.ContainerRequestContext;
-import jakarta.ws.rs.core.Context;
+import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
@@ -2071,94 +2224,54 @@ public class {cls}Resource {{
     @Inject
     {cls}Service service;
 
-    @Context
-    ContainerRequestContext ctx;
+    @Inject
+    Utility utility;
 
     @GET
     public Response getAll() {{
-        long start = System.nanoTime();
-        final String path = "/{path_prefix}";
-        String kl = RequestCtx.kl(ctx);
-        String tid = RequestCtx.tid(ctx);
-        boolean modAsync = RequestCtx.modAsync(ctx);
-        String processType = RequestCtx.processType(ctx);
-
         List<{cls}DTO> list = service.getAll();
-        return Utility.okOrEmpty(list, path, kl, tid, modAsync, processType, start);
+        return utility.okOrEmpty(list);
     }}
 
     @GET
     @Path("/{{id}}")
     public Response getById(@PathParam("id") Long id) {{
-        long start = System.nanoTime();
-        final String path = "/{path_prefix}/{{id}}";
-        String kl = RequestCtx.kl(ctx);
-        String tid = RequestCtx.tid(ctx);
-        boolean modAsync = RequestCtx.modAsync(ctx);
-        String processType = RequestCtx.processType(ctx);
-
         if (id == null || id <= 0) {{
-            return Utility.badRequest("Path param 'id' non valido", path, kl, tid, modAsync, processType, start);
+            return utility.badRequest("Path param 'id' non valido");
         }}
-        {cls}DTO dto = service.getById(id);
-        return Utility.okOrNotFound(Optional.ofNullable(dto), "Nessun elemento trovato per id=" + id,
-                path, kl, tid, modAsync, processType, start);
+        return utility.okOrNotFound(Optional.ofNullable(service.getById(id)),
+                "Nessun elemento trovato per id=" + id);
     }}
 
     @GET
     @Path("/code/{{code}}")
     public Response getByCode(@PathParam("code") String code) {{
-        long start = System.nanoTime();
-        final String path = "/{path_prefix}/code/{{code}}";
-        String kl = RequestCtx.kl(ctx);
-        String tid = RequestCtx.tid(ctx);
-        boolean modAsync = RequestCtx.modAsync(ctx);
-        String processType = RequestCtx.processType(ctx);
-
         if (code == null || code.isBlank()) {{
-            return Utility.badRequest("Path param 'code' non valido", path, kl, tid, modAsync, processType, start);
+            return utility.badRequest("Path param 'code' non valido");
         }}
-        {cls}DTO dto = service.getByCode(code);
-        return Utility.okOrNotFound(Optional.ofNullable(dto), "Nessun elemento trovato per code=" + code,
-                path, kl, tid, modAsync, processType, start);
+        return utility.okOrNotFound(Optional.ofNullable(service.getByCode(code)),
+                "Nessun elemento trovato per code=" + code);
     }}
 
     @GET
     @Path("/last-executions")
     public Response getLastExecutions(@QueryParam("limit") @DefaultValue("10") int limit) {{
-        long start = System.nanoTime();
-        final String path = "/{path_prefix}/last-executions";
-        String kl = RequestCtx.kl(ctx);
-        String tid = RequestCtx.tid(ctx);
-        boolean modAsync = RequestCtx.modAsync(ctx);
-        String processType = RequestCtx.processType(ctx);
-
         if (limit <= 0) {{
-            return Utility.badRequest("Query param 'limit' deve essere > 0", path, kl, tid, modAsync, processType, start);
+            return utility.badRequest("Query param 'limit' deve essere > 0");
         }}
-        List<{cls}DTO> list = service.getLastExecutions(limit);
-        return Utility.okOrEmpty(list, path, kl, tid, modAsync, processType, start);
+        return utility.okOrEmpty(service.getLastExecutions(limit));
     }}
 
     @POST
     @Path("/save")
     public Response save({cls}DTO dto) {{
-        long start = System.nanoTime();
-        final String path = "/{path_prefix}/save";
-        String kl = RequestCtx.kl(ctx);
-        String tid = RequestCtx.tid(ctx);
-        boolean modAsync = RequestCtx.modAsync(ctx);
-        String processType = RequestCtx.processType(ctx);
-
         if (dto == null) {{
-            return Utility.badRequest("Body mancante o non valido", path, kl, tid, modAsync, processType, start);
+            return utility.badRequest("Body mancante o non valido");
         }}
         boolean exists = dto.code() != null && !dto.code().isBlank()
                 && service.getByCode(dto.code()) != null;
         {cls}DTO saved = service.save(dto);
-        return exists
-                ? Utility.ok(saved, path, kl, tid, modAsync, processType, start)
-                : Utility.created(saved, path, kl, tid, modAsync, processType, start);
+        return exists ? utility.ok(saved) : utility.created(saved);
     }}
 }}
 """
@@ -3985,11 +4098,13 @@ def scaffold_service_dg(sn: str, pkg: str, output_dir: str,
     write(java / "response"  / "GenericResponse.java",            gen_generic_response(pkg))
     write(java / "response"  / "ResponseStatus.java",             gen_response_status(pkg))
 
+    write(java / "filter"    / "RequestHeadersContext.java",    gen_request_headers_context(pkg))
     write(java / "filter"    / "MdcHeadersFilter.java",           gen_mdc_filter(pkg))
     write(java / "filter"    / "GlobalHeadersOpenApiFilter.java",  gen_global_openapi_filter(pkg))
 
     write(java / "config"    / "ApplicationConfig.java",          gen_application_config(pkg))
     write(java / "config"    / "OpenApiConfig.java",              gen_openapi_config(pkg, sn))
+    write(java / "config"    / "RestApplication.java",            gen_rest_application(pkg))
 
     write(java / "health"    / "ApplicationHealthCheck.java",     gen_health_check(pkg))
 
@@ -4043,11 +4158,14 @@ def scaffold_service(sn: str, pkg: str, output_dir: str,
     write(java / "response" / "ResponseStatus.java",           gen_response_status(pkg))
     write(java / "response" / "CustomResponse.java",           gen_custom_response(pkg))
 
+    write(java / "filter"   / "RequestHeadersContext.java",    gen_request_headers_context(pkg))
     write(java / "filter"   / "MdcHeadersFilter.java",         gen_mdc_filter(pkg))
     write(java / "filter"   / "GlobalHeadersOpenApiFilter.java",gen_global_openapi_filter(pkg))
+    write(java / "filter"   / "RestClientHeadersFilter.java",  gen_rest_client_headers_filter(pkg))
 
     write(java / "config"   / "ApplicationConfig.java",        gen_application_config(pkg))
     write(java / "config"   / "OpenApiConfig.java",            gen_openapi_config(pkg, sn))
+    write(java / "config"   / "RestApplication.java",          gen_rest_application(pkg))
 
     write(java / "health"   / "ApplicationHealthCheck.java",   gen_health_check(pkg))
 
