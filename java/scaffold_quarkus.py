@@ -357,10 +357,10 @@ public interface Constants {{
     String MSG_ERROR = "Error";
 
     interface Headers {{
-        String TRANSACTION_ID = "transactionId";
-        String KEYLOGIC       = "keyLogic";
-        String MOD_ASYNC      = "modAsync";
-        String PROCESS_TYPE   = "processType";
+        String TRANSACTION_ID = "TRANSACTION-ID";
+        String KEYLOGIC       = "KEY-LOGIC";
+        String MOD_ASYNC      = "MOD-ASYNC";
+        String PROCESS_TYPE   = "PROCESS-TYPE";
         String JWT            = "JWT";
         String AUTHORIZATION  = "Authorization";
     }}
@@ -433,6 +433,7 @@ import {pkg}.exception.RemoteCallException;
 import {pkg}.filter.RequestHeadersContext;
 import {pkg}.response.GenericResponse;
 import {pkg}.response.GenericResponse.Message;
+import {pkg}.response.ResponseStatus;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.core.Response;
@@ -450,9 +451,12 @@ public class Utility {{
     public static String defaultUuidIfBlank(String v) {{
         return (v == null || v.isBlank()) ? UUID.randomUUID().toString() : v;
     }}
-    public static boolean parseBooleanOrDefault(String v, boolean def) {{
-        if (v == null || v.isBlank()) return def;
-        return switch (v.trim().toLowerCase()) {{ case "true" -> true; case "false" -> false; default -> def; }};
+    public static boolean parseBooleanOrDefault(String v, boolean defaultValue) {{
+        if (v == null || v.isBlank()) return defaultValue;
+        String s = v.trim().toLowerCase();
+        if ("true".equals(s)) return true;
+        if ("false".equals(s)) return false;
+        return defaultValue;
     }}
     public static String defaultIfBlank(String v, String def) {{
         return (v == null || v.trim().isEmpty()) ? def : v;
@@ -515,6 +519,16 @@ public class Utility {{
         GenericResponse<T> gr = baseGeneric(path);
         gr.setData(data);
         gr.setExecutionTime(executionTime());
+        if (data instanceof List<?> l) gr.setNumberOfElements(l.size());
+        return withCommonHeaders(Response.ok(gr)).build();
+    }}
+
+    public <T> Response inProgress(T data) {{
+        String path = currentPath();
+        GenericResponse<T> gr = baseGeneric(path);
+        gr.setData(data);
+        gr.setExecutionTime(executionTime());
+        gr.setStatus(ResponseStatus.IN_ELABORAZIONE.toString());
         if (data instanceof List<?> l) gr.setNumberOfElements(l.size());
         return withCommonHeaders(Response.ok(gr)).build();
     }}
@@ -631,6 +645,7 @@ public class Utility {{
         if (list == null || list.isEmpty()) return okEmpty();
         return okWithMessageCustom(list, customMessage);
     }}
+
 }}
 """
 
@@ -986,6 +1001,7 @@ def gen_global_openapi_filter(pkg):
 package {pkg}.filter;
 
 import java.util.Map;
+
 import org.eclipse.microprofile.openapi.OASFactory;
 import org.eclipse.microprofile.openapi.OASFilter;
 import org.eclipse.microprofile.openapi.models.OpenAPI;
@@ -993,27 +1009,55 @@ import org.eclipse.microprofile.openapi.models.PathItem;
 import org.eclipse.microprofile.openapi.models.media.Schema;
 import org.eclipse.microprofile.openapi.models.parameters.Parameter;
 
+import {pkg}.utils.Constants;
+
 public class GlobalHeadersOpenApiFilter implements OASFilter {{
+
     @Override
     public void filterOpenAPI(OpenAPI openAPI) {{
-        if (openAPI.getPaths() == null || openAPI.getPaths().getPathItems() == null) return;
-        for (Map.Entry<String, PathItem> e : openAPI.getPaths().getPathItems().entrySet()) addHeaders(e.getValue());
+
+        if (openAPI.getPaths() == null || openAPI.getPaths().getPathItems() == null) {{
+            return;
+        }}
+
+        for (Map.Entry<String, PathItem> entry : openAPI.getPaths().getPathItems().entrySet()) {{
+            addHeaders(entry.getValue());
+        }}
     }}
-    private void addHeaders(PathItem p) {{
-        addIfPresent(p.getGET()); addIfPresent(p.getPOST()); addIfPresent(p.getPUT());
-        addIfPresent(p.getDELETE()); addIfPresent(p.getPATCH());
+
+    private void addHeaders(PathItem pathItem) {{
+        addIfPresent(pathItem.getGET());
+        addIfPresent(pathItem.getPOST());
+        addIfPresent(pathItem.getPUT());
+        addIfPresent(pathItem.getDELETE());
+        addIfPresent(pathItem.getPATCH());
+        addIfPresent(pathItem.getOPTIONS());
+        addIfPresent(pathItem.getHEAD());
     }}
-    private void addIfPresent(org.eclipse.microprofile.openapi.models.Operation op) {{
-        if (op == null) return;
-        op.addParameter(header("keyLogic",     "Chiave di correlazione tecnica"));
-        op.addParameter(header("transactionId","Transaction id tecnico"));
-        op.addParameter(header("modAsync",     "Modalità asincrona"));
-        op.addParameter(header("processType",  "Tipo processo (GUI | FLUSSO | N/A)"));
+
+    private void addIfPresent(org.eclipse.microprofile.openapi.models.Operation operation) {{
+
+        if (operation == null)
+            return;
+
+        operation.addParameter(header(Constants.Headers.KEYLOGIC, "Chiave di correlazione tecnica"));
+        operation.addParameter(header(Constants.Headers.TRANSACTION_ID, "Transaction id tecnico"));
+        operation.addParameter(header(Constants.Headers.MOD_ASYNC, "Modalità asincrona"));
+        operation.addParameter(header(Constants.Headers.PROCESS_TYPE, "Tipo processo (GUI | FLUSSO | N/A)"));
     }}
-    private Parameter header(String name, String desc) {{
-        Schema s = OASFactory.createSchema(); s.setType(Schema.SchemaType.STRING);
+
+    private Parameter header(String name, String description) {{
+
+        Schema schema = OASFactory.createSchema();
+        schema.setType(Schema.SchemaType.STRING);
+
         Parameter p = OASFactory.createParameter();
-        p.setName(name); p.setIn(Parameter.In.HEADER); p.setRequired(false); p.setDescription(desc); p.setSchema(s);
+        p.setName(name);
+        p.setIn(Parameter.In.HEADER);
+        p.setRequired(false);
+        p.setDescription(description);
+        p.setSchema(schema);
+
         return p;
     }}
 }}
@@ -1067,10 +1111,10 @@ import org.eclipse.microprofile.openapi.annotations.servers.Server;
     servers = @Server(url = "/"),
     security = @SecurityRequirement(name = "bearerAuth"),
     components = @org.eclipse.microprofile.openapi.annotations.Components(parameters = {{
-        @Parameter(name = "keyLogic",      in = ParameterIn.HEADER, description = "Chiave di correlazione tecnica",       required = false),
-        @Parameter(name = "transactionId", in = ParameterIn.HEADER, description = "Transaction id tecnico",               required = false),
-        @Parameter(name = "modAsync",      in = ParameterIn.HEADER, description = "Modalità asincrona",                   required = false),
-        @Parameter(name = "processType",   in = ParameterIn.HEADER, description = "Tipo processo (GUI | FLUSSO | N/A)",   required = false)
+        @Parameter(name = "KEY-LOGIC",      in = ParameterIn.HEADER, description = "Chiave di correlazione tecnica",       required = false),
+        @Parameter(name = "TRANSACTION-ID", in = ParameterIn.HEADER, description = "Transaction id tecnico",               required = false),
+        @Parameter(name = "MOD-ASYNC",      in = ParameterIn.HEADER, description = "Modalità asincrona",                   required = false),
+        @Parameter(name = "PROCESS-TYPE",   in = ParameterIn.HEADER, description = "Tipo processo (GUI | FLUSSO | N/A)",   required = false)
     }})
 )
 @SecurityScheme(
