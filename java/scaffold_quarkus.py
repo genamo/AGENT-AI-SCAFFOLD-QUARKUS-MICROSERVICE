@@ -1197,17 +1197,164 @@ public class TopicService {{
 
 
 def gen_kafka_producer(pkg):
+    """Frontiera: usa RequestHeadersContext per arricchire automaticamente gli header."""
     return f"""\
 package {pkg}.kafka;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.UUID;
+
 import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.eclipse.microprofile.reactive.messaging.Channel;
 import org.eclipse.microprofile.reactive.messaging.Emitter;
 import org.eclipse.microprofile.reactive.messaging.Message;
 import org.jboss.logging.Logger;
+
+import io.smallrye.reactive.messaging.kafka.api.OutgoingKafkaRecordMetadata;
+import {pkg}.filter.RequestHeadersContext;
+import {pkg}.service.TopicService;
+import {pkg}.utils.JsonUtils;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+
+@ApplicationScoped
+public class KafkaGenericProducer {{
+
+    private static final Logger LOG = Logger.getLogger(KafkaGenericProducer.class);
+
+    @Inject
+    TopicService topicService;
+
+    @Inject
+    RequestHeadersContext headersCtx;
+
+    @Inject
+    @Channel("kafka-out")
+    Emitter<String> emitter;
+
+    // ======================================================
+    // API pubblica — header letti automaticamente dal contesto
+    // ======================================================
+
+    public void sendEvent(String flow, String topic, Object payload) {{
+        String messageKey = UUID.randomUUID().toString();
+        sendInternal(flow, topic, messageKey, payload);
+    }}
+
+    public void sendSerialEvent(String flow, String topic, String messageKey, Object payload) {{
+        if (messageKey == null || messageKey.isBlank()) {{
+            messageKey = UUID.randomUUID().toString();
+        }}
+        sendInternal(flow, topic, messageKey, payload);
+    }}
+
+    // ======================================================
+    // API pubblica — header forniti esplicitamente dal chiamante
+    // ======================================================
+
+    public void sendSerialEventWithHeaders(String transId, String keyLogic, String processType,
+            String flow, String topic, String messageKey, Object payload) {{
+        if (messageKey == null) {{
+            messageKey = UUID.randomUUID().toString();
+        }}
+        send(topicService.getRealTopic(topic), messageKey,
+                JsonUtils.writeAsJsonPrettyLogStringWithoutNull(payload),
+                Map.of("TRANSACTION-ID", transId, "KEY-LOGIC", keyLogic,
+                       "PROCESS-TYPE", processType, "FLOW", flow,
+                       "MESSAGE-KEY", messageKey, "content-type", "application/json"));
+    }}
+
+    public void sendEventWithHeaders(String transId, String keyLogic, String processType,
+            String flow, String topic, Object payload) {{
+        String messageKey = UUID.randomUUID().toString();
+        send(topicService.getRealTopic(topic), messageKey,
+                JsonUtils.writeAsJsonPrettyLogStringWithoutNull(payload),
+                Map.of("TRANSACTION-ID", transId, "KEY-LOGIC", keyLogic,
+                       "PROCESS-TYPE", processType, "FLOW", flow,
+                       "MESSAGE-KEY", messageKey, "content-type", "application/json"));
+    }}
+
+    // ======================================================
+    // Internals
+    // ======================================================
+
+    private void sendInternal(String flow, String topic, String messageKey, Object payload) {{
+        String transId      = safeOrGenerated(headersCtx != null ? headersCtx.getTransactionId() : null);
+        String keyLogic     = safeOrGenerated(headersCtx != null ? headersCtx.getKeyLogic() : null);
+        String processType  = safeOrDefault(headersCtx != null ? headersCtx.getProcessType() : null, "N/A");
+
+        send(topicService.getRealTopic(topic),
+             messageKey,
+             JsonUtils.writeAsJsonPrettyLogStringWithoutNull(payload),
+             headersMap(transId, keyLogic, processType, flow, messageKey));
+    }}
+
+    private Map<String, String> headersMap(String transId, String keyLogic, String processType,
+                                           String flow, String messageKey) {{
+        return Map.of(
+            "TRANSACTION-ID", transId,
+            "KEY-LOGIC",      keyLogic,
+            "PROCESS-TYPE",   processType,
+            "FLOW",           flow,
+            "MESSAGE-KEY",    messageKey,
+            "content-type",   "application/json"
+        );
+    }}
+
+    private void send(String topic, String key, String payload, Map<String, String> headers) {{
+        Headers kafkaHeaders = toKafkaHeaders(headers);
+        OutgoingKafkaRecordMetadata<String> metadata =
+            OutgoingKafkaRecordMetadata.<String>builder()
+                .withTopic(topic)
+                .withKey(key)
+                .withHeaders(kafkaHeaders)
+                .build();
+        Message<String> message = Message.of(payload).addMetadata(metadata);
+        LOG.debugf("Sending message to topic [%s] with key [%s]", topic, key);
+        emitter.send(message);
+    }}
+
+    private Headers toKafkaHeaders(Map<String, String> headers) {{
+        Headers kafkaHeaders = new RecordHeaders();
+        if (headers != null) {{
+            headers.forEach((k, v) -> {{
+                if (v != null) {{
+                    kafkaHeaders.add(k, v.getBytes(StandardCharsets.UTF_8));
+                }}
+            }});
+        }}
+        return kafkaHeaders;
+    }}
+
+    private String safeOrGenerated(String v) {{
+        return (v == null || v.isBlank()) ? UUID.randomUUID().toString() : v;
+    }}
+
+    private String safeOrDefault(String v, String def) {{
+        return (v == null || v.isBlank()) ? def : v;
+    }}
+}}
+"""
+
+
+def gen_kafka_producer_dg(pkg):
+    """DataGateway: senza RequestHeadersContext, usa Instance<JsonWebToken> per sicurezza JWT."""
+    return f"""\
+package {pkg}.kafka;
+
+import java.nio.charset.StandardCharsets;
+import java.util.Map;
+import java.util.UUID;
+
+import org.apache.kafka.common.header.Headers;
+import org.apache.kafka.common.header.internals.RecordHeaders;
+import org.eclipse.microprofile.reactive.messaging.Channel;
+import org.eclipse.microprofile.reactive.messaging.Emitter;
+import org.eclipse.microprofile.reactive.messaging.Message;
+import org.jboss.logging.Logger;
+
 import io.smallrye.reactive.messaging.kafka.api.OutgoingKafkaRecordMetadata;
 import {pkg}.service.TopicService;
 import {pkg}.utils.JsonUtils;
@@ -1216,34 +1363,116 @@ import jakarta.inject.Inject;
 
 @ApplicationScoped
 public class KafkaGenericProducer {{
-    @Inject TopicService topicService;
-    @Inject @Channel("kafka-out") Emitter<String> emitter;
+
     private static final Logger LOG = Logger.getLogger(KafkaGenericProducer.class);
 
-    public void sendEvent(String transId, String kl, String pt, String flow, String topic, Object payload) {{
-        String mk = UUID.randomUUID().toString();
-        send(topicService.getRealTopic(topic), mk, JsonUtils.writeAsJsonPrettyLogStringWithoutNull(payload),
-             Map.of("TRANSACTION-ID", transId, "KEY-LOGIC", kl, "PROCESS-TYPE", pt,
-                    "FLOW", flow, "MESSAGE-KEY", mk, "content-type", "application/json"));
+    @Inject
+    TopicService topicService;
+
+    @Inject
+    @Channel("kafka-out")
+    Emitter<String> emitter;
+
+    // ======================================================
+    // API pubblica — header generati automaticamente
+    // ======================================================
+
+    public void sendEvent(String flow, String topic, Object payload) {{
+        String messageKey = UUID.randomUUID().toString();
+        sendInternal(flow, topic, messageKey, payload);
     }}
-    public void sendSerialEvent(String transId, String kl, String pt, String flow,
-                                String topic, String mk, Object payload) {{
-        if (mk == null) mk = UUID.randomUUID().toString();
-        send(topicService.getRealTopic(topic), mk, JsonUtils.writeAsJsonPrettyLogStringWithoutNull(payload),
-             Map.of("TRANSACTION-ID", transId, "KEY-LOGIC", kl, "PROCESS-TYPE", pt,
-                    "FLOW", flow, "MESSAGE-KEY", mk, "content-type", "application/json"));
+
+    public void sendSerialEvent(String flow, String topic, String messageKey, Object payload) {{
+        if (messageKey == null || messageKey.isBlank()) {{
+            messageKey = UUID.randomUUID().toString();
+        }}
+        sendInternal(flow, topic, messageKey, payload);
     }}
+
+    // ======================================================
+    // API pubblica — header forniti esplicitamente dal chiamante
+    // ======================================================
+
+    public void sendSerialEventWithHeaders(String transId, String keyLogic, String processType,
+            String flow, String topic, String messageKey, Object payload) {{
+        if (messageKey == null) {{
+            messageKey = UUID.randomUUID().toString();
+        }}
+        send(topicService.getRealTopic(topic), messageKey,
+                JsonUtils.writeAsJsonPrettyLogStringWithoutNull(payload),
+                Map.of("TRANSACTION-ID", transId, "KEY-LOGIC", keyLogic,
+                       "PROCESS-TYPE", processType, "FLOW", flow,
+                       "MESSAGE-KEY", messageKey, "content-type", "application/json"));
+    }}
+
+    public void sendEventWithHeaders(String transId, String keyLogic, String processType,
+            String flow, String topic, Object payload) {{
+        String messageKey = UUID.randomUUID().toString();
+        send(topicService.getRealTopic(topic), messageKey,
+                JsonUtils.writeAsJsonPrettyLogStringWithoutNull(payload),
+                Map.of("TRANSACTION-ID", transId, "KEY-LOGIC", keyLogic,
+                       "PROCESS-TYPE", processType, "FLOW", flow,
+                       "MESSAGE-KEY", messageKey, "content-type", "application/json"));
+    }}
+
+    // ======================================================
+    // Internals
+    // ======================================================
+
+    private void sendInternal(String flow, String topic, String messageKey, Object payload) {{
+        String transId     = safeOrGenerated(null);
+        String keyLogic    = safeOrGenerated(null);
+        String processType = safeOrDefault(null, "N/A");
+
+        send(topicService.getRealTopic(topic),
+             messageKey,
+             JsonUtils.writeAsJsonPrettyLogStringWithoutNull(payload),
+             headersMap(transId, keyLogic, processType, flow, messageKey));
+    }}
+
+    private Map<String, String> headersMap(String transId, String keyLogic, String processType,
+                                           String flow, String messageKey) {{
+        return Map.of(
+            "TRANSACTION-ID", transId,
+            "KEY-LOGIC",      keyLogic,
+            "PROCESS-TYPE",   processType,
+            "FLOW",           flow,
+            "MESSAGE-KEY",    messageKey,
+            "content-type",   "application/json"
+        );
+    }}
+
     private void send(String topic, String key, String payload, Map<String, String> headers) {{
-        OutgoingKafkaRecordMetadata<String> meta =
+        Headers kafkaHeaders = toKafkaHeaders(headers);
+        OutgoingKafkaRecordMetadata<String> metadata =
             OutgoingKafkaRecordMetadata.<String>builder()
-                .withTopic(topic).withKey(key).withHeaders(toKafkaHeaders(headers)).build();
-        LOG.debugf("Sending to topic [%s] key [%s]", topic, key);
-        emitter.send(Message.of(payload).addMetadata(meta));
+                .withTopic(topic)
+                .withKey(key)
+                .withHeaders(kafkaHeaders)
+                .build();
+        Message<String> message = Message.of(payload).addMetadata(metadata);
+        LOG.debugf("Sending message to topic [%s] with key [%s]", topic, key);
+        emitter.send(message);
     }}
-    private Headers toKafkaHeaders(Map<String, String> h) {{
-        Headers kh = new RecordHeaders();
-        if (h != null) h.forEach((k, v) -> kh.add(k, v.getBytes()));
-        return kh;
+
+    private Headers toKafkaHeaders(Map<String, String> headers) {{
+        Headers kafkaHeaders = new RecordHeaders();
+        if (headers != null) {{
+            headers.forEach((k, v) -> {{
+                if (v != null) {{
+                    kafkaHeaders.add(k, v.getBytes(StandardCharsets.UTF_8));
+                }}
+            }});
+        }}
+        return kafkaHeaders;
+    }}
+
+    private String safeOrGenerated(String v) {{
+        return (v == null || v.isBlank()) ? UUID.randomUUID().toString() : v;
+    }}
+
+    private String safeOrDefault(String v, String def) {{
+        return (v == null || v.isBlank()) ? def : v;
     }}
 }}
 """
@@ -4064,6 +4293,237 @@ public class B2BTokenFilter implements ContainerRequestFilter {{
 """
 
 
+def gen_info_yaml(sn: str, pkg: str, svc_type: str, lib_group: str, lib_artifact: str) -> str:
+    """Genera il file info.yaml con i metadati del microservizio."""
+    db_section = ""
+    if svc_type == "datagateway":
+        db_section = """\
+
+database:
+  type: mssql
+  migration: flyway
+  audit: hibernate-envers
+  scheduler: quarkus-scheduler + shedlock
+"""
+    client_section = ""
+    if svc_type == "frontiera":
+        client_section = f"""\
+
+rest-client:
+  dg-client:
+    config-key: {sn}-dg-client
+    description: "Client REST verso il DataGateway corrispondente"
+"""
+    return f"""\
+# ─────────────────────────────────────────────────────────────────────────────
+# info.yaml — Metadati del microservizio (generato con scaffold PMR Quarkus)
+# ─────────────────────────────────────────────────────────────────────────────
+
+service:
+  name: {sn}
+  type: {svc_type}
+  version: 1.0.0-SNAPSHOT
+  package: {pkg}
+  description: "Microservizio {svc_type} '{sn}' — pattern PMR Quarkus"
+
+dependencies:
+  common-library:
+    groupId: {lib_group}
+    artifactId: {lib_artifact}
+    version: 1.0.0-SNAPSHOT
+  quarkus-platform:
+    version: 3.9.2
+  java: "21"
+{db_section}
+kafka:
+  producer:
+    channel: kafka-out
+    methods:
+      - sendEvent(flow, topic, payload)
+      - sendSerialEvent(flow, topic, messageKey, payload)
+      - sendSerialEventWithHeaders(transId, keyLogic, processType, flow, topic, messageKey, payload)
+      - sendEventWithHeaders(transId, keyLogic, processType, flow, topic, payload)
+  consumer:
+    channel: kafka-in
+    description: "Aggiungere metodi @Incoming('kafka-in') in KafkaGenericConsumer"
+
+observability:
+  health: quarkus-smallrye-health
+  metrics: micrometer-prometheus
+  openapi: quarkus-smallrye-openapi
+  logging: jboss-logging + MDC headers (TRANSACTION-ID, KEY-LOGIC, PROCESS-TYPE)
+{client_section}
+security:
+  oidc: quarkus-oidc
+"""
+
+
+def gen_readme(sn: str, pkg: str, svc_type: str, lib_group: str, lib_artifact: str) -> str:
+    """Genera il README.md del microservizio."""
+    type_label = "Frontiera" if svc_type == "frontiera" else "DataGateway"
+    type_desc = (
+        "Microservizio **Frontiera**: espone API REST, si autentica via OIDC, "
+        "fa da proxy verso il DataGateway corrispondente e pubblica eventi Kafka."
+        if svc_type == "frontiera"
+        else
+        "Microservizio **DataGateway**: accede al database MSSQL, gestisce "
+        "migrazioni Flyway, audit Envers, job schedulati (ShedLock) e pubblica eventi Kafka."
+    )
+    db_section = ""
+    if svc_type == "datagateway":
+        db_section = """
+### Variabili d'ambiente — Database
+
+| Variabile | Descrizione |
+|---|---|
+| `DB_URL` | JDBC URL del database MSSQL |
+| `DB_USERNAME` | Username database |
+| `DB_PASSWORD` | Password database |
+"""
+    client_section = ""
+    if svc_type == "frontiera":
+        client_section = f"""
+### Client REST verso il DataGateway
+
+Il client `SampleDgClient` (chiave `{sn}-dg-client`) punta al DataGateway.
+Configurarlo in `application.properties`:
+
+```properties
+quarkus.rest-client.{sn}-dg-client.url=${{DG_URL:http://localhost:8081}}
+```
+"""
+    kafka_section = (
+        "- **Frontiera** (`RequestHeadersContext`): gli header Kafka (`TRANSACTION-ID`, `KEY-LOGIC`, `PROCESS-TYPE`) "
+        "vengono propagati automaticamente dal contesto HTTP."
+        if svc_type == "frontiera"
+        else
+        "- **DataGateway** (senza `RequestHeadersContext`): gli header vengono generati automaticamente "
+        "o forniti esplicitamente tramite i metodi `*WithHeaders`."
+    )
+    next_steps_extra = (
+        "4. Rinomina le classi `Sample*` con i nomi reali delle entità di dominio\n"
+        "5. Configura i topic Kafka in `Constants.java` → interfaccia `Topic`"
+        if svc_type == "frontiera"
+        else
+        "4. Rinomina classi `Sample*`, `*Entity`, `*Repository`, `*Mapper` con i nomi reali\n"
+        "5. Aggiorna la migrazione `V1__CREATE_TABLES.sql` con le tabelle reali\n"
+        "6. Configura i topic Kafka in `Constants.java` → interfaccia `Topic`"
+    )
+    return f"""\
+# {sn}
+
+> Microservizio **{type_label}** — pattern PMR Quarkus
+
+{type_desc}
+
+---
+
+## Struttura del progetto
+
+```
+{sn}/
+├── info.yaml                             ← metadati servizio
+├── pom.xml
+├── Dockerfile.hybrid-devops
+├── src/
+│   ├── main/
+│   │   ├── java/{pkg.replace('.', '/')}/
+│   │   │   ├── config/        ApplicationConfig, OpenApiConfig, RestApplication
+│   │   │   ├── filter/        MdcHeadersFilter, GlobalHeadersOpenApiFilter{',' + chr(10) + '│   │   │   │              RequestHeadersContext' if svc_type == 'frontiera' else ''}
+│   │   │   ├── health/        ApplicationHealthCheck
+│   │   │   ├── kafka/         KafkaGenericProducer, KafkaGenericConsumer
+│   │   │   ├── service/       TopicService{',' + chr(10) + '│   │   │   │              SampleService' if svc_type == 'frontiera' else ''}
+│   │   │   ├── resource/      {'SampleResource' if svc_type == 'frontiera' else to_class_prefix(sn) + 'Resource'}
+│   │   │   ├── dto/           {'SampleDTO' if svc_type == 'frontiera' else to_class_prefix(sn) + 'DTO'}
+│   │   │   ├── exception/     RemoteCallException, RetryableRemoteException
+│   │   │   ├── response/      GenericResponse, ResponseStatus{',' + chr(10) + '│   │   │   │              CustomResponse' if svc_type == 'frontiera' else ''}
+│   │   │   └── utils/         Constants, RequestCtx, Utility, JsonUtils, MessageTypeEnum{''.join([chr(10) + '│   │   │   ├── client/        SampleDgClient' if svc_type == 'frontiera' else '', chr(10) + '│   │   │   ├── domain/        ' + to_class_prefix(sn) + 'Entity, RevisionInfo' if svc_type == 'datagateway' else '', chr(10) + '│   │   │   ├── repository/    ' + to_class_prefix(sn) + 'Repository' if svc_type == 'datagateway' else '', chr(10) + '│   │   │   ├── mapper/        ' + to_class_prefix(sn) + 'Mapper' if svc_type == 'datagateway' else '', chr(10) + '│   │   │   └── scheduler/     ScheduledJob, ShedLockConfig' if svc_type == 'datagateway' else ''])}
+│   │   └── resources/
+│   │       ├── application.properties
+│   │       └── db/migration/  V1__CREATE_TABLES.sql{'  ← solo DG' if svc_type == 'datagateway' else '  ← assente nel Frontiera'}
+│   └── test/
+│       └── resources/
+│           └── application-test.properties
+```
+
+---
+
+## Dipendenze principali
+
+| Libreria | Coordinata |
+|---|---|
+| Common Library | `{lib_group}:{lib_artifact}:1.0.0-SNAPSHOT` |
+| Quarkus BOM | `io.quarkus.platform:quarkus-bom:3.9.2` |
+| Java | `21` |
+{f'| MSSQL + JPA Panache | `quarkus-hibernate-orm-panache` |{chr(10)}| Flyway | `quarkus-flyway` |{chr(10)}| Hibernate Envers | audit storico |{chr(10)}| Quarkus Scheduler + ShedLock | job schedulati |' if svc_type == 'datagateway' else '| MapStruct | generazione mapper |'}
+
+---
+
+## Kafka — `KafkaGenericProducer`
+
+{kafka_section}
+
+### Metodi disponibili
+
+```java
+// Header automatici dal contesto
+producer.sendEvent(flow, topic, payload);
+producer.sendSerialEvent(flow, topic, messageKey, payload);
+
+// Header espliciti
+producer.sendSerialEventWithHeaders(transId, keyLogic, processType, flow, topic, messageKey, payload);
+producer.sendEventWithHeaders(transId, keyLogic, processType, flow, topic, payload);
+```
+
+Header Kafka propagati: `TRANSACTION-ID`, `KEY-LOGIC`, `PROCESS-TYPE`, `FLOW`, `MESSAGE-KEY`, `content-type`.
+
+---
+
+## Configurazione
+
+Copia e personalizza `src/main/resources/application.properties`.
+
+Variabili d'ambiente minime:
+
+| Variabile | Descrizione |
+|---|---|
+| `KAFKA_BOOTSTRAP_SERVERS` | Bootstrap server Kafka |
+| `OIDC_AUTH_SERVER_URL` | URL OIDC |
+| `REDIS_HOST` | Host Redis |
+{db_section}
+{client_section}
+---
+
+## Avvio locale
+
+```bash
+# 1. Assicurati che la common library sia installata
+cd ../{lib_artifact} && mvn install
+
+# 2. Avvia in modalità dev
+cd {sn} && mvn quarkus:dev
+```
+
+L'applicazione sarà disponibile su `http://localhost:8080`.
+Swagger UI: `http://localhost:8080/q/swagger-ui`
+Health: `http://localhost:8080/q/health`
+Metrics: `http://localhost:8080/q/metrics`
+
+---
+
+## Prossimi passi
+
+1. Configura `application.properties` con i valori reali
+2. Configura le variabili d'ambiente necessarie
+3. Verifica la connessione al broker Kafka
+{next_steps_extra}
+
+---
+
+> Generato con **scaffold PMR Quarkus** — pattern {type_label}
+"""
+
+
 def scaffold_library(lib_name: str, lib_pkg: str, output_dir: str) -> None:
     lib_group = parent_pkg(lib_pkg)
     root      = Path(output_dir) / lib_name
@@ -4152,7 +4612,7 @@ def scaffold_service_dg(sn: str, pkg: str, output_dir: str,
 
     write(java / "health"    / "ApplicationHealthCheck.java",     gen_health_check(pkg))
 
-    write(java / "kafka"     / "KafkaGenericProducer.java",       gen_kafka_producer(pkg))
+    write(java / "kafka"     / "KafkaGenericProducer.java",       gen_kafka_producer_dg(pkg))
     write(java / "kafka"     / "KafkaGenericConsumer.java",       gen_kafka_consumer_dg(pkg, sn))
     write(java / "kafka"     / "DevKafkaTopicInitializer.java",   gen_dev_kafka_topic_initializer(pkg))
 
@@ -4168,6 +4628,9 @@ def scaffold_service_dg(sn: str, pkg: str, output_dir: str,
 
     write(java / "scheduler" / "ScheduledJob.java",               gen_scheduled_job(pkg, sn))
     write(java / "scheduler" / "ShedLockConfig.java",             gen_shedlock_config(pkg))
+
+    write(root / "info.yaml",                                      gen_info_yaml(sn, pkg, "datagateway", lib_group, lib_artifact))
+    write(root / "README.md",                                      gen_readme(sn, pkg, "datagateway", lib_group, lib_artifact))
 
     print(f"\n✅  Microservizio DataGateway scaffoldato → {root}")
 
@@ -4222,6 +4685,9 @@ def scaffold_service(sn: str, pkg: str, output_dir: str,
     write(java / "client"   / "SampleDgClient.java",           gen_sample_client(pkg, sn))
     write(java / "dto"      / "SampleDTO.java",                gen_sample_dto(pkg))
     write(java / "resource" / "SampleResource.java",           gen_sample_resource(pkg, sn, lib_pkg))
+
+    write(root / "info.yaml",                                   gen_info_yaml(sn, pkg, "frontiera", lib_group, lib_artifact))
+    write(root / "README.md",                                   gen_readme(sn, pkg, "frontiera", lib_group, lib_artifact))
 
     print(f"\n✅  Microservizio scaffoldato → {root}")
 
