@@ -1553,92 +1553,148 @@ public interface SampleDgClient {{
 
 
 def gen_sample_service(pkg, lib_pkg):
-    domain = pkg.split(".")[-1]
     return f"""\
 package {pkg}.service;
 
 import java.util.List;
 import java.util.Optional;
+
 import org.eclipse.microprofile.rest.client.inject.RestClient;
 import org.jboss.logging.Logger;
-import org.jboss.resteasy.reactive.ClientWebApplicationException;
+
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import io.smallrye.common.annotation.RunOnVirtualThread;
 import {pkg}.client.SampleDgClient;
 import {pkg}.dto.SampleDTO;
 import {pkg}.exception.RemoteCallException;
-import {pkg}.response.CustomResponse;
-import {pkg}.response.GenericResponse.Message;
-import {lib_pkg}.util.CacheUtils;
+import {pkg}.filter.RequestHeadersContext;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.core.Response;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 @ApplicationScoped
+@RunOnVirtualThread
 public class SampleService {{
+
     private static final Logger LOG = Logger.getLogger(SampleService.class);
 
-    @Inject @RestClient SampleDgClient client;
-    @Inject ObjectMapper objectMapper;
-    @Inject CacheUtils cacheUtils;
+    private static final TypeReference<List<SampleDTO>> LIST_TYPE = new TypeReference<>() {{}};
 
-    @ConfigProperty(name = "cache.{domain}.sample.ttl-seconds", defaultValue = "300")
-    int cacheGetAllTtlSeconds;
+    @Inject
+    @RestClient
+    SampleDgClient client;
+
+    @Inject
+    ObjectMapper objectMapper;
+
+    // ✅ Context CDI: propaga KL/TID/PT nel logging e negli header client
+    @Inject
+    RequestHeadersContext headersCtx;
+
+    // =========================
+    // GET ALL
+    // =========================
 
     public List<SampleDTO> getAll() {{
-        String cacheKey = cacheUtils.key("{domain}", "sample", "getall");
-        return cacheUtils.getOrCompute(
-            cacheKey,
-            new TypeReference<List<SampleDTO>>() {{}},
-            cacheGetAllTtlSeconds,
-            () -> {{
-                try (Response r = client.getAll()) {{
-                    if (r.getStatus() == 204) return List.of();
-                    if (r.getStatus() == 200) return readList(r.readEntity(String.class));
-                    throw new RemoteCallException("Errore getAll Sample: HTTP " + r.getStatus());
-                }}
-            }}
-        );
-    }}
-
-    public CustomResponse<Optional<SampleDTO>> getById(Long id) {{
-        try (Response r = client.getById(id)) {{
-            int status = r.getStatus();
-            if (status == 200) {{
-                SampleDTO dto = r.readEntity(SampleDTO.class);
-                CustomResponse<Optional<SampleDTO>> cr = new CustomResponse<>();
-                cr.setResponseData(Optional.ofNullable(dto));
-                return cr;
-            }}
-            String errorBody = r.hasEntity() ? r.readEntity(String.class) : "";
-            throw new RemoteCallException("Errore getById Sample: HTTP " + status + " - " + errorBody);
-        }} catch (ClientWebApplicationException e) {{
-            if (e.getResponse() != null && e.getResponse().getStatus() == 404) {{
-                CustomResponse<Optional<SampleDTO>> cr = new CustomResponse<>();
-                cr.setResponseData(Optional.empty());
-                Message msg = new Message();
-                msg.setMessageType("NOT_FOUND");
-                msg.setMessageCode("INFO01");
-                msg.setMessageDescription("Nessun elemento trovato per id=" + id);
-                cr.setMessage(msg);
-                return cr;
-            }}
-            throw e;
+        try (Response resp = client.getAll()) {{
+            return handleListResponse(resp, "GET /sample");
         }}
     }}
+
+    // =========================
+    // GET BY ID
+    // =========================
+
+    public Optional<SampleDTO> getById(Long id) {{
+        try (Response resp = client.getById(id)) {{
+            int status = resp.getStatus();
+
+            if (status == Response.Status.NOT_FOUND.getStatusCode()) {{
+                return Optional.empty();
+            }}
+            if (status == Response.Status.OK.getStatusCode()) {{
+                return Optional.ofNullable(resp.readEntity(SampleDTO.class));
+            }}
+            if (status == Response.Status.BAD_REQUEST.getStatusCode()) {{
+                throw new IllegalArgumentException("getById: richiesta non valida. " + safeReadBody(resp));
+            }}
+
+            throw remoteError("GET /sample/{{id}}", status, resp);
+        }}
+    }}
+
+    // =========================
+    // SAVE
+    // =========================
 
     public SampleDTO save(SampleDTO dto) {{
-        try (Response r = client.save(dto)) {{
-            if (r.getStatus() == 200 || r.getStatus() == 201) return r.readEntity(SampleDTO.class);
-            throw new RemoteCallException("Errore save Sample: HTTP " + r.getStatus());
+        try (Response resp = client.save(dto)) {{
+            int status = resp.getStatus();
+
+            if (status == Response.Status.OK.getStatusCode()
+                    || status == Response.Status.CREATED.getStatusCode()) {{
+                return resp.readEntity(SampleDTO.class);
+            }}
+            if (status == Response.Status.BAD_REQUEST.getStatusCode()) {{
+                throw new IllegalArgumentException("save: richiesta non valida. " + safeReadBody(resp));
+            }}
+
+            throw remoteError("POST /sample/save", status, resp);
         }}
+    }}
+
+    // =========================
+    // Helpers
+    // =========================
+
+    private List<SampleDTO> handleListResponse(Response resp, String operation) {{
+        int status = resp.getStatus();
+
+        if (status == Response.Status.NO_CONTENT.getStatusCode()) {{
+            return List.of();
+        }}
+        if (status == Response.Status.OK.getStatusCode()) {{
+            return readList(resp.readEntity(String.class));
+        }}
+        if (status == Response.Status.BAD_REQUEST.getStatusCode()) {{
+            throw new IllegalArgumentException(operation + ": richiesta non valida. " + safeReadBody(resp));
+        }}
+
+        throw remoteError(operation, status, resp);
     }}
 
     private List<SampleDTO> readList(String json) {{
         if (json == null || json.isBlank()) return List.of();
-        try {{ return objectMapper.readValue(json, new TypeReference<List<SampleDTO>>() {{}}); }}
-        catch (Exception e) {{ throw new RemoteCallException("Deserializzazione lista SampleDTO fallita", e); }}
+        try {{
+            return objectMapper.readValue(json, LIST_TYPE);
+        }} catch (Exception e) {{
+            throw new RemoteCallException("Impossibile deserializzare lista SampleDTO", e);
+        }}
+    }}
+
+    private String safeReadBody(Response resp) {{
+        try {{
+            return resp.hasEntity() ? resp.readEntity(String.class) : "";
+        }} catch (Exception e) {{
+            return "";
+        }}
+    }}
+
+    private RemoteCallException remoteError(String operation, int status, Response resp) {{
+        String body = safeReadBody(resp);
+        LOG.errorf("%s fallita. KL=%s TID=%s PT=%s HTTP=%d body=%s",
+                operation,
+                headersCtx.getKeyLogic(),
+                headersCtx.getTransactionId(),
+                headersCtx.getProcessType(),
+                status,
+                body
+        );
+        return new RemoteCallException(
+                operation + " errore HTTP " + status + (body.isBlank() ? "" : (" - " + body))
+        );
     }}
 }}
 """
@@ -1651,18 +1707,16 @@ package {pkg}.resource;
 
 import java.util.List;
 import java.util.Optional;
-import org.jboss.logging.Logger;
-import io.smallrye.common.annotation.Blocking;
+
+import io.smallrye.common.annotation.RunOnVirtualThread;
 import {pkg}.dto.SampleDTO;
 import {pkg}.exception.RemoteCallException;
-import {pkg}.response.CustomResponse;
 import {pkg}.service.SampleService;
 import {pkg}.utils.Utility;
 import {lib_pkg}.annotation.AuthzRead;
 import {lib_pkg}.annotation.AuthzWrite;
 import {lib_pkg}.annotation.LogPmr;
 import jakarta.inject.Inject;
-import jakarta.validation.Valid;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
@@ -1670,44 +1724,62 @@ import jakarta.ws.rs.core.Response;
 @Path("/")
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)
-@Blocking
+@RunOnVirtualThread
 @LogPmr
 public class SampleResource {{
-    private static final Logger LOG = Logger.getLogger(SampleResource.class);
 
-    @Inject SampleService service;
-    @Inject Utility utility;
+    @Inject
+    SampleService service;
 
-    @GET @AuthzRead @Path("/{prefix}_sample_getall")
+    @Inject
+    Utility utility;
+
+    @GET
+    @AuthzRead
+    @Path("/{prefix}_sample_getall")
     public Response getAll() {{
         try {{
             List<SampleDTO> list = service.getAll();
             return utility.okOrEmpty(list);
+        }} catch (IllegalArgumentException e) {{
+            return utility.badRequest(e.getMessage());
+        }} catch (RemoteCallException e) {{
+            return utility.badGateway(e);
         }}
-        catch (IllegalArgumentException e) {{ return utility.badRequest(e.getMessage()); }}
-        catch (RemoteCallException e)      {{ return utility.badGateway(e); }}
     }}
 
-    @GET @AuthzRead @Path("/{prefix}_sample_getbyid")
-    public Response getById(@QueryParam("id") Long id) {{
-        if (id == null) return utility.badRequest("id obbligatorio");
+    @GET
+    @AuthzRead
+    @Path("/{prefix}_sample_id/{{id}}")
+    public Response getById(@PathParam("id") Long id) {{
+        if (id == null || id <= 0) {{
+            return utility.badRequest("Path param 'id' non valido");
+        }}
         try {{
-            CustomResponse<Optional<SampleDTO>> cr = service.getById(id);
-            return utility.okOrNotFoundWithCustomMessage(cr.getResponseData(), cr.getMessage());
+            Optional<SampleDTO> opt = service.getById(id);
+            return utility.okOrNotFound(opt, "Nessun elemento trovato per id=" + id);
+        }} catch (IllegalArgumentException e) {{
+            return utility.badRequest(e.getMessage());
+        }} catch (RemoteCallException e) {{
+            return utility.badGateway(e);
         }}
-        catch (IllegalArgumentException e) {{ return utility.badRequest(e.getMessage()); }}
-        catch (RemoteCallException e)      {{ return utility.badGateway(e); }}
     }}
 
-    @POST @AuthzWrite @Path("/{prefix}_sample_save")
-    public Response save(@Valid SampleDTO dto) {{
-        if (dto == null) return utility.badRequest("Body mancante o non valido");
+    @POST
+    @AuthzWrite
+    @Path("/{prefix}_sample_save")
+    public Response save(SampleDTO dto) {{
+        if (dto == null) {{
+            return utility.badRequest("Body mancante o non valido");
+        }}
         try {{
             SampleDTO saved = service.save(dto);
             return utility.created(saved);
+        }} catch (IllegalArgumentException e) {{
+            return utility.badRequest(e.getMessage());
+        }} catch (RemoteCallException e) {{
+            return utility.badGateway(e);
         }}
-        catch (IllegalArgumentException e) {{ return utility.badRequest(e.getMessage()); }}
-        catch (RemoteCallException e)      {{ return utility.badGateway(e); }}
     }}
 }}
 """
@@ -2375,27 +2447,229 @@ public record {cls}DTO(
 """
 
 
+def gen_utility_dg(pkg):
+    return f"""\
+package {pkg}.utils;
+
+import java.util.List;
+import java.util.Optional;
+import java.util.UUID;
+
+import {pkg}.exception.RemoteCallException;
+import jakarta.ws.rs.core.Response;
+
+public class Utility {{
+
+    // =========================
+    // Helpers statici puri
+    // =========================
+
+    public static String defaultUuidIfBlank(String v) {{
+        return (v == null || v.isBlank()) ? UUID.randomUUID().toString() : v;
+    }}
+
+    public static boolean parseBooleanOrDefault(String v, boolean defaultValue) {{
+        if (v == null || v.isBlank()) return defaultValue;
+        String s = v.trim().toLowerCase();
+        if ("true".equals(s)) return true;
+        if ("false".equals(s)) return false;
+        return defaultValue;
+    }}
+
+    public static String defaultIfBlank(String value, String defaultValue) {{
+        return (value == null || value.trim().isEmpty()) ? defaultValue : value;
+    }}
+
+    public static long elapsedMs(long startNanos) {{
+        return (System.nanoTime() - startNanos) / 1_000_000;
+    }}
+
+    public static String safe(Object v) {{
+        if (v == null) return "null";
+        String s = String.valueOf(v).trim();
+        if (s.isEmpty()) return "blank";
+        return (s.length() > 120) ? s.substring(0, 120) + "..." : s;
+    }}
+
+    // =========================
+    // Common headers
+    // =========================
+
+    public static Response.ResponseBuilder withCommonHeaders(
+            Response.ResponseBuilder rb,
+            String keyLogic,
+            String transactionId,
+            boolean modAsync,
+            String processType
+    ) {{
+        return rb
+                .header(Constants.Headers.KEYLOGIC, keyLogic)
+                .header(Constants.Headers.TRANSACTION_ID, transactionId)
+                .header(Constants.Headers.MOD_ASYNC, String.valueOf(modAsync))
+                .header(Constants.Headers.PROCESS_TYPE, processType);
+    }}
+
+    // =========================
+    // Success responses
+    // =========================
+
+    public static <T> Response ok(
+            T data,
+            String path,
+            String keyLogic,
+            String transactionId,
+            boolean modAsync,
+            String processType,
+            long startNanos
+    ) {{
+        return withCommonHeaders(
+                Response.ok(data),
+                keyLogic, transactionId, modAsync, processType
+        ).build();
+    }}
+
+    public static <T> Response created(
+            T data,
+            String path,
+            String keyLogic,
+            String transactionId,
+            boolean modAsync,
+            String processType,
+            long startNanos
+    ) {{
+        return withCommonHeaders(
+                Response.status(Response.Status.CREATED).entity(data),
+                keyLogic, transactionId, modAsync, processType
+        ).build();
+    }}
+
+    public static <T> Response okOrEmpty(
+            List<T> list,
+            String path,
+            String keyLogic,
+            String transactionId,
+            boolean modAsync,
+            String processType,
+            long startNanos
+    ) {{
+        if (list == null) list = List.of();
+        return ok(list, path, keyLogic, transactionId, modAsync, processType, startNanos);
+    }}
+
+    public static <T> Response okOrNotFound(
+            Optional<T> opt,
+            String notFoundMessage,
+            String path,
+            String keyLogic,
+            String transactionId,
+            boolean modAsync,
+            String processType,
+            long startNanos
+    ) {{
+        if (opt == null || opt.isEmpty()) {{
+            return notFound(notFoundMessage, path,
+                    keyLogic, transactionId, modAsync, processType, startNanos);
+        }}
+        return ok(opt.get(), path, keyLogic, transactionId, modAsync, processType, startNanos);
+    }}
+
+    public static Response noContentOnlyHeaders(
+            String keyLogic,
+            String transactionId,
+            boolean modAsync,
+            String processType
+    ) {{
+        return withCommonHeaders(
+                Response.noContent(),
+                keyLogic, transactionId, modAsync, processType
+        ).build();
+    }}
+
+    // =========================
+    // Error responses
+    // =========================
+
+    public record ErrorPayload(
+            String messageType,
+            String messageCode,
+            String messageDescription
+    ) {{}}
+
+    public static Response badRequest(
+            String message,
+            String path,
+            String keyLogic,
+            String transactionId,
+            boolean modAsync,
+            String processType,
+            long startNanos
+    ) {{
+        return withCommonHeaders(
+                Response.status(Response.Status.BAD_REQUEST)
+                        .entity(new ErrorPayload("ERROR", "BAD_REQUEST", message)),
+                keyLogic, transactionId, modAsync, processType
+        ).build();
+    }}
+
+    public static Response notFound(
+            String message,
+            String path,
+            String keyLogic,
+            String transactionId,
+            boolean modAsync,
+            String processType,
+            long startNanos
+    ) {{
+        return withCommonHeaders(
+                Response.status(Response.Status.NOT_FOUND)
+                        .entity(new ErrorPayload("ERROR", "NOT_FOUND", message)),
+                keyLogic, transactionId, modAsync, processType
+        ).build();
+    }}
+
+    public static Response badGateway(
+            RemoteCallException e,
+            String path,
+            String keyLogic,
+            String transactionId,
+            boolean modAsync,
+            String processType,
+            long startNanos
+    ) {{
+        return withCommonHeaders(
+                Response.status(Response.Status.BAD_GATEWAY)
+                        .entity(new ErrorPayload("ERROR", "BAD_GATEWAY", e.getMessage())),
+                keyLogic, transactionId, modAsync, processType
+        ).build();
+    }}
+}}
+"""
+
+
 def gen_sample_service_dg(pkg, sn):
     cls = to_class_prefix(sn)
     return f"""\
 package {pkg}.service;
 
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
+import org.eclipse.microprofile.jwt.JsonWebToken;
 import org.jboss.logging.Logger;
 
+import io.smallrye.common.annotation.RunOnVirtualThread;
 import {pkg}.domain.{cls}Entity;
 import {pkg}.dto.{cls}DTO;
 import {pkg}.mapper.{cls}Mapper;
 import {pkg}.repository.{cls}Repository;
 import {pkg}.utils.JsonUtils;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import jakarta.transaction.Transactional;
 
 @ApplicationScoped
+@RunOnVirtualThread
 public class {cls}Service {{
 
     private static final Logger LOG = Logger.getLogger({cls}Service.class);
@@ -2406,8 +2680,11 @@ public class {cls}Service {{
     @Inject
     {cls}Mapper mapper;
 
+    @Inject
+    Instance<JsonWebToken> jwt;
+
     public List<{cls}DTO> getAll() {{
-        return mapper.toDtoList(repository.findAllActive());
+        return mapper.toDtoList(repository.listAll());
     }}
 
     public {cls}DTO getById(Long id) {{
@@ -2434,24 +2711,12 @@ public class {cls}Service {{
             mapper.updateEntityFromDto(dto, entityToSave);
         }} else {{
             entityToSave = mapper.toEntity(dto);
-            entityToSave.setActionDate(LocalDateTime.now());
-            entityToSave.setUserAction(currentUser());
             repository.persist(entityToSave);
         }}
         return mapper.toDto(entityToSave);
     }}
 
-    @Transactional
-    public void softDelete(Long id) {{
-        {cls}Entity entity = repository.findById(id);
-        if (entity != null) {{
-            entity.setIsDeleted(1);
-            entity.setActionDate(LocalDateTime.now());
-            entity.setUserAction(currentUser());
-        }}
-    }}
-
-    public void processFromKafka(String payload) {{
+    public void processSaveFromKafka(String payload) {{
         try {{
             {cls}DTO dto = JsonUtils.getObject(payload, {cls}DTO.class);
             save(dto);
@@ -2461,6 +2726,12 @@ public class {cls}Service {{
     }}
 
     protected String currentUser() {{
+        try {{
+            if (!jwt.isUnsatisfied() && !jwt.isAmbiguous()) {{
+                JsonWebToken token = jwt.get();
+                return token != null ? token.getName() : "system";
+            }}
+        }} catch (Exception ignored) {{}}
         return "system";
     }}
 }}
@@ -2477,74 +2748,172 @@ package {pkg}.resource;
 import java.util.List;
 import java.util.Optional;
 
-import io.smallrye.common.annotation.Blocking;
+import io.smallrye.common.annotation.RunOnVirtualThread;
 import {pkg}.dto.{cls}DTO;
 import {pkg}.service.{cls}Service;
+import {pkg}.utils.RequestCtx;
 import {pkg}.utils.Utility;
 import {lib_pkg}.annotation.LogPmr;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
+import jakarta.ws.rs.container.ContainerRequestContext;
+import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
 @Path("/{path_prefix}")
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)
-@Blocking
+@RunOnVirtualThread
 @LogPmr
 public class {cls}Resource {{
 
     @Inject
     {cls}Service service;
 
-    @Inject
-    Utility utility;
+    @Context
+    ContainerRequestContext ctx;
 
+    // ======================================================
+    // GET ALL
+    // ======================================================
     @GET
     public Response getAll() {{
+        long start = System.nanoTime();
+        final String path = "/{path_prefix}";
+
+        String kl = RequestCtx.kl(ctx);
+        String tid = RequestCtx.tid(ctx);
+        boolean modAsync = RequestCtx.modAsync(ctx);
+        String processType = RequestCtx.processType(ctx);
+
         List<{cls}DTO> list = service.getAll();
-        return utility.okOrEmpty(list);
+
+        return Utility.okOrEmpty(
+                list, path, kl, tid, modAsync, processType, start
+        );
     }}
 
+    // ======================================================
+    // GET BY ID
+    // ======================================================
     @GET
     @Path("/{{id}}")
     public Response getById(@PathParam("id") Long id) {{
+        long start = System.nanoTime();
+        final String path = "/{path_prefix}/{{id}}";
+
+        String kl = RequestCtx.kl(ctx);
+        String tid = RequestCtx.tid(ctx);
+        boolean modAsync = RequestCtx.modAsync(ctx);
+        String processType = RequestCtx.processType(ctx);
+
         if (id == null || id <= 0) {{
-            return utility.badRequest("Path param 'id' non valido");
+            return Utility.badRequest(
+                    "Path param 'id' non valido",
+                    path, kl, tid, modAsync, processType, start
+            );
         }}
-        return utility.okOrNotFound(Optional.ofNullable(service.getById(id)),
-                "Nessun elemento trovato per id=" + id);
+
+        {cls}DTO dto = service.getById(id);
+
+        return Utility.okOrNotFound(
+                Optional.ofNullable(dto),
+                "Nessun elemento trovato per id=" + id,
+                path, kl, tid, modAsync, processType, start
+        );
     }}
 
+    // ======================================================
+    // GET BY CODE
+    // ======================================================
     @GET
     @Path("/code/{{code}}")
     public Response getByCode(@PathParam("code") String code) {{
+        long start = System.nanoTime();
+        final String path = "/{path_prefix}/code/{{code}}";
+
+        String kl = RequestCtx.kl(ctx);
+        String tid = RequestCtx.tid(ctx);
+        boolean modAsync = RequestCtx.modAsync(ctx);
+        String processType = RequestCtx.processType(ctx);
+
         if (code == null || code.isBlank()) {{
-            return utility.badRequest("Path param 'code' non valido");
+            return Utility.badRequest(
+                    "Path param 'code' non valido",
+                    path, kl, tid, modAsync, processType, start
+            );
         }}
-        return utility.okOrNotFound(Optional.ofNullable(service.getByCode(code)),
-                "Nessun elemento trovato per code=" + code);
+
+        {cls}DTO dto = service.getByCode(code);
+
+        return Utility.okOrNotFound(
+                Optional.ofNullable(dto),
+                "Nessun elemento trovato per code=" + code,
+                path, kl, tid, modAsync, processType, start
+        );
     }}
 
+    // ======================================================
+    // GET LAST EXECUTIONS
+    // ======================================================
     @GET
     @Path("/last-executions")
-    public Response getLastExecutions(@QueryParam("limit") @DefaultValue("10") int limit) {{
+    public Response getLastExecutions(
+            @QueryParam("limit") @DefaultValue("10") int limit) {{
+
+        long start = System.nanoTime();
+        final String path = "/{path_prefix}/last-executions";
+
+        String kl = RequestCtx.kl(ctx);
+        String tid = RequestCtx.tid(ctx);
+        boolean modAsync = RequestCtx.modAsync(ctx);
+        String processType = RequestCtx.processType(ctx);
+
         if (limit <= 0) {{
-            return utility.badRequest("Query param 'limit' deve essere > 0");
+            return Utility.badRequest(
+                    "Query param 'limit' deve essere > 0",
+                    path, kl, tid, modAsync, processType, start
+            );
         }}
-        return utility.okOrEmpty(service.getLastExecutions(limit));
+
+        List<{cls}DTO> list = service.getLastExecutions(limit);
+
+        return Utility.okOrEmpty(
+                list, path, kl, tid, modAsync, processType, start
+        );
     }}
 
+    // ======================================================
+    // SAVE
+    // ======================================================
     @POST
     @Path("/save")
     public Response save({cls}DTO dto) {{
+        long start = System.nanoTime();
+        final String path = "/{path_prefix}/save";
+
+        String kl = RequestCtx.kl(ctx);
+        String tid = RequestCtx.tid(ctx);
+        boolean modAsync = RequestCtx.modAsync(ctx);
+        String processType = RequestCtx.processType(ctx);
+
         if (dto == null) {{
-            return utility.badRequest("Body mancante o non valido");
+            return Utility.badRequest(
+                    "Body mancante o non valido",
+                    path, kl, tid, modAsync, processType, start
+            );
         }}
-        boolean exists = dto.code() != null && !dto.code().isBlank()
+
+        boolean exists = dto.code() != null
+                && !dto.code().isBlank()
                 && service.getByCode(dto.code()) != null;
+
         {cls}DTO saved = service.save(dto);
-        return exists ? utility.ok(saved) : utility.created(saved);
+
+        return exists
+                ? Utility.ok(saved, path, kl, tid, modAsync, processType, start)
+                : Utility.created(saved, path, kl, tid, modAsync, processType, start);
     }}
 }}
 """
@@ -4592,17 +4961,12 @@ def scaffold_service_dg(sn: str, pkg: str, output_dir: str,
 
     write(java / "utils"     / "Constants.java",                  gen_constants_dg(pkg, sn))
     write(java / "utils"     / "RequestCtx.java",                 gen_request_ctx(pkg))
-    write(java / "utils"     / "Utility.java",                    gen_utility(pkg))
+    write(java / "utils"     / "Utility.java",                    gen_utility_dg(pkg))
     write(java / "utils"     / "JsonUtils.java",                  gen_json_utils(pkg))
     write(java / "utils"     / "MessageTypeEnum.java",            gen_message_type_enum(pkg))
 
     write(java / "exception" / "RemoteCallException.java",        gen_remote_call_exception(pkg))
-    write(java / "exception" / "RetryableRemoteException.java",   gen_retryable_remote_exception(pkg))
 
-    write(java / "response"  / "GenericResponse.java",            gen_generic_response(pkg))
-    write(java / "response"  / "ResponseStatus.java",             gen_response_status(pkg))
-
-    write(java / "filter"    / "RequestHeadersContext.java",    gen_request_headers_context(pkg))
     write(java / "filter"    / "MdcHeadersFilter.java",           gen_mdc_filter(pkg))
     write(java / "filter"    / "GlobalHeadersOpenApiFilter.java",  gen_global_openapi_filter(pkg))
 
