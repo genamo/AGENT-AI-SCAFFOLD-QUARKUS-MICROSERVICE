@@ -996,6 +996,76 @@ public class MdcHeadersFilter implements ContainerRequestFilter, ContainerRespon
 """
 
 
+def gen_mdc_filter_dg(pkg):
+    """DataGateway: senza RequestHeadersContext (classe Frontiera-only)."""
+    return f"""\
+package {pkg}.filter;
+
+import org.jboss.logging.MDC;
+import {pkg}.utils.Constants;
+import {pkg}.utils.Utility;
+import jakarta.annotation.Priority;
+import jakarta.ws.rs.Priorities;
+import jakarta.ws.rs.container.*;
+import jakarta.ws.rs.core.MultivaluedMap;
+import jakarta.ws.rs.ext.Provider;
+
+@Provider
+@Priority(Priorities.AUTHENTICATION)
+public class MdcHeadersFilter implements ContainerRequestFilter, ContainerResponseFilter {{
+
+    public static final String PROP_KL           = "CTX_KL";
+    public static final String PROP_TID          = "CTX_TID";
+    public static final String PROP_MOD_ASYNC    = "CTX_MOD_ASYNC";
+    public static final String PROP_PROCESS_TYPE = "CTX_PROCESS_TYPE";
+
+    @Override
+    public void filter(ContainerRequestContext req) {{
+        String kl  = Utility.defaultUuidIfBlank(req.getHeaderString(Constants.Headers.KEYLOGIC));
+        String tid = Utility.defaultUuidIfBlank(req.getHeaderString(Constants.Headers.TRANSACTION_ID));
+        boolean ma = Utility.parseBooleanOrDefault(req.getHeaderString(Constants.Headers.MOD_ASYNC), false);
+        String pt  = Utility.defaultIfBlank(req.getHeaderString(Constants.Headers.PROCESS_TYPE), "N/A");
+
+        MultivaluedMap<String, String> h = req.getHeaders();
+        putIfBlank(h, Constants.Headers.KEYLOGIC,       kl);
+        putIfBlank(h, Constants.Headers.TRANSACTION_ID, tid);
+        putIfBlank(h, Constants.Headers.MOD_ASYNC,      String.valueOf(ma));
+        putIfBlank(h, Constants.Headers.PROCESS_TYPE,   pt);
+
+        req.setProperty(PROP_KL, kl); req.setProperty(PROP_TID, tid);
+        req.setProperty(PROP_MOD_ASYNC, ma); req.setProperty(PROP_PROCESS_TYPE, pt);
+
+        MDC.put(Constants.LogParams.KL,  kl);
+        MDC.put(Constants.LogParams.TN,  tid);
+        MDC.put(Constants.LogParams.PT,  pt);
+        MDC.put(Constants.LogParams.MA,  String.valueOf(ma));
+        MDC.put(Constants.LogParams.API, req.getMethod() + " /" + req.getUriInfo().getPath());
+    }}
+
+    @Override
+    public void filter(ContainerRequestContext req, ContainerResponseContext resp) {{
+        try {{
+            String kl  = (String) req.getProperty(PROP_KL);
+            String tid = (String) req.getProperty(PROP_TID);
+            Object maObj = req.getProperty(PROP_MOD_ASYNC);
+            boolean ma = (maObj instanceof Boolean b) ? b : false;
+            String pt  = (String) req.getProperty(PROP_PROCESS_TYPE);
+
+            resp.getHeaders().putSingle(Constants.Headers.KEYLOGIC,       kl);
+            resp.getHeaders().putSingle(Constants.Headers.TRANSACTION_ID, tid);
+            resp.getHeaders().putSingle(Constants.Headers.MOD_ASYNC,      String.valueOf(ma));
+            resp.getHeaders().putSingle(Constants.Headers.PROCESS_TYPE,   pt);
+        }} finally {{ MDC.clear(); }}
+    }}
+
+    private static void putIfBlank(MultivaluedMap<String, String> h, String name, String value) {{
+        String cur = h.getFirst(name);
+        if (cur == null || cur.trim().isEmpty()) h.putSingle(name, value);
+    }}
+}}
+"""
+
+
 def gen_global_openapi_filter(pkg):
     return f"""\
 package {pkg}.filter;
@@ -3003,7 +3073,7 @@ public class KafkaGenericConsumer {{
         if (flow != null && !flow.isBlank()) {{
             switch (flow) {{
                 case "SAVE":
-                    {short}Service.processFromKafka(payload);
+                    {short}Service.processSaveFromKafka(payload);
                     break;
                 default:
                     LOG.warnf("Unknown flow '%s' in message headers, skipping", flow);
@@ -4967,7 +5037,7 @@ def scaffold_service_dg(sn: str, pkg: str, output_dir: str,
 
     write(java / "exception" / "RemoteCallException.java",        gen_remote_call_exception(pkg))
 
-    write(java / "filter"    / "MdcHeadersFilter.java",           gen_mdc_filter(pkg))
+    write(java / "filter"    / "MdcHeadersFilter.java",           gen_mdc_filter_dg(pkg))
     write(java / "filter"    / "GlobalHeadersOpenApiFilter.java",  gen_global_openapi_filter(pkg))
 
     write(java / "config"    / "ApplicationConfig.java",          gen_application_config(pkg))
