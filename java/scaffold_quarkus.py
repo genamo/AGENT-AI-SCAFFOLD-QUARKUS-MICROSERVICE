@@ -313,8 +313,15 @@ mp.openapi.filter={pkg}.filter.GlobalHeadersOpenApiFilter
 {client_key}/mp-rest/readTimeout=30000
 
 ############################################
+# PMR COMMON LIBRARY - CDI INDEX
+############################################
+quarkus.index-dependency.pmr-common.group-id=it.eng.snam.pmr
+quarkus.index-dependency.pmr-common.artifact-id=pmr-common-library
+
+############################################
 # DEV PROFILE
 ############################################
+%dev.quarkus.oidc.enabled=false
 %dev.security.enabled=true
 %dev.security.authz.bypass=true
 %dev.kafka.bootstrap.servers=localhost:${{KAFKA_SERVER_PORT:9092}}
@@ -650,9 +657,10 @@ public class Utility {{
 """
 
 
-def gen_json_utils(pkg):
+def gen_json_utils(full_pkg):
+    """Genera JsonUtils nel package indicato (full_pkg = package completo, es. it.eng.snam.pmr.common.util)."""
     return f"""\
-package {pkg}.utils;
+package {full_pkg};
 
 import com.fasterxml.jackson.annotation.JsonInclude.Include;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -664,7 +672,9 @@ import java.io.IOException;
 public class JsonUtils {{
     private static final Logger logger = LoggerFactory.getLogger(JsonUtils.class);
     private static final ObjectMapper mapper = new ObjectMapper();
+
     private JsonUtils() {{}}
+
     static {{
         mapper.registerModule(new JavaTimeModule());
         mapper.configure(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false);
@@ -674,15 +684,21 @@ public class JsonUtils {{
         mapper.configure(DeserializationFeature.ACCEPT_SINGLE_VALUE_AS_ARRAY, true);
         mapper.enable(DeserializationFeature.ACCEPT_EMPTY_STRING_AS_NULL_OBJECT);
     }}
+
     public static String writeAsJsonStringWithoutNull(Object obj) {{
         try {{ return obj != null ? mapper.writer().writeValueAsString(obj) : null; }}
-        catch (Exception e) {{ logger.error("JSON serialize error"); return null; }}
+        catch (Exception e) {{ logger.error("While trying to convert to JSON String"); return null; }}
     }}
+
     public static String writeAsJsonPrettyLogStringWithoutNull(Object obj) {{
         try {{ return obj != null ? mapper.writerWithDefaultPrettyPrinter().writeValueAsString(obj) : null; }}
-        catch (Exception e) {{ logger.error("JSON serialize error"); return null; }}
+        catch (Exception e) {{ logger.error("While trying to convert to JSON String"); return null; }}
     }}
-    public static <T> T getObject(String json, Class<T> clazz) throws IOException {{ return mapper.readValue(json, clazz); }}
+
+    public static <T> T getObject(String json, Class<T> clazz) throws IOException {{
+        return mapper.readValue(json, clazz);
+    }}
+
     public static <T> T getObject(TypeReference<T> ref, String value) throws IOException {{
         return (value != null && !value.trim().isEmpty()) ? mapper.readValue(value, ref) : null;
     }}
@@ -1266,7 +1282,7 @@ public class TopicService {{
 """
 
 
-def gen_kafka_producer(pkg):
+def gen_kafka_producer(pkg, lib_pkg):
     """Frontiera: usa RequestHeadersContext per arricchire automaticamente gli header."""
     return f"""\
 package {pkg}.kafka;
@@ -1285,7 +1301,7 @@ import org.jboss.logging.Logger;
 import io.smallrye.reactive.messaging.kafka.api.OutgoingKafkaRecordMetadata;
 import {pkg}.filter.RequestHeadersContext;
 import {pkg}.service.TopicService;
-import {pkg}.utils.JsonUtils;
+import {lib_pkg}.util.JsonUtils;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -1409,7 +1425,7 @@ public class KafkaGenericProducer {{
 """
 
 
-def gen_kafka_producer_dg(pkg):
+def gen_kafka_producer_dg(pkg, lib_pkg):
     """DataGateway: senza RequestHeadersContext, usa Instance<JsonWebToken> per sicurezza JWT."""
     return f"""\
 package {pkg}.kafka;
@@ -1427,7 +1443,7 @@ import org.jboss.logging.Logger;
 
 import io.smallrye.reactive.messaging.kafka.api.OutgoingKafkaRecordMetadata;
 import {pkg}.service.TopicService;
-import {pkg}.utils.JsonUtils;
+import {lib_pkg}.util.JsonUtils;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -2124,8 +2140,8 @@ quarkus.redis.hosts=${{REDIS_HOSTS:redis://localhost:6379}}
 ############################################
 # APP CACHE
 ############################################
-app.cache.redis.enabled=true
-app.cache.redis.prefix=cache
+quarkus.cache.enabled=true
+quarkus.cache.caffeine."{short}-sample".expire-after-write=10M
 
 ############################################
 # KAFKA
@@ -2166,27 +2182,11 @@ mp.messaging.incoming.sample-in.max.poll.records=1
 mp.messaging.incoming.sample-in.topic=${{kafka-prefix.topics}}-{short}-in
 
 ############################################
-# SECURITY - HTTP policy
-############################################
-# Tutte le path pubbliche: la security applicativa è gestita da AuthzReadFilter/AuthzWriteFilter.
-quarkus.http.auth.permission.public.paths=/*
-quarkus.http.auth.permission.public.policy=permit
-
-############################################
 # SECURITY - OIDC
 ############################################
-# OIDC disabilitato: la validazione JWT è delegata all'authorization service esterno.
-quarkus.oidc.enabled=false
-quarkus.oidc.auth-server-url=${{OIDC_AUTH_SERVER_URL:https://sso.example.com/auth/realms/PMR}}
+quarkus.oidc.auth-server-url=${{OIDC_AUTH_SERVER_URL:http://localhost:8080/realms/myrealm}}
 quarkus.oidc.client-id=${{OIDC_CLIENT_ID:quarkus-client}}
 quarkus.oidc.credentials.secret=${{OIDC_SECRET:mysecret}}
-
-############################################
-# AUTHORIZATION (common library)
-############################################
-authorization-client/mp-rest/url=${{AUTHZ_URL:http://localhost:8090/authorization}}
-authorization-client/mp-rest/connectTimeout=2000
-authorization-client/mp-rest/readTimeout=3000
 
 ############################################
 # OBSERVABILITY
@@ -2212,8 +2212,10 @@ cron.clean.sample=0 0 5 * * ?
 # DEV PROFILE
 ############################################
 %dev.quarkus.hibernate-orm.enabled=true
-%dev.security.enabled=true
-%dev.security.authz.bypass=true
+%dev.quarkus.oidc.enabled=false
+%dev.quarkus.http.auth.permission.public.paths=/*
+%dev.quarkus.http.auth.permission.public.policy=permit
+%dev.security.enabled=false
 %dev.kafka.bootstrap.servers=localhost:${{KAFKA_SERVER_PORT:9092}}
 %dev.kafka.security.protocol=PLAINTEXT
 %dev.kafka.topics.auto-create=true
@@ -2716,7 +2718,7 @@ public class Utility {{
 """
 
 
-def gen_sample_service_dg(pkg, sn):
+def gen_sample_service_dg(pkg, sn, lib_pkg):
     cls = to_class_prefix(sn)
     return f"""\
 package {pkg}.service;
@@ -2732,7 +2734,7 @@ import {pkg}.domain.{cls}Entity;
 import {pkg}.dto.{cls}DTO;
 import {pkg}.mapper.{cls}Mapper;
 import {pkg}.repository.{cls}Repository;
-import {pkg}.utils.JsonUtils;
+import {lib_pkg}.util.JsonUtils;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
@@ -4876,7 +4878,7 @@ quarkus.rest-client.{sn}-dg-client.url=${{DG_URL:http://localhost:8081}}
 │   │   │   ├── dto/           {'SampleDTO' if svc_type == 'frontiera' else to_class_prefix(sn) + 'DTO'}
 │   │   │   ├── exception/     RemoteCallException, RetryableRemoteException
 │   │   │   ├── response/      GenericResponse, ResponseStatus{',' + chr(10) + '│   │   │   │              CustomResponse' if svc_type == 'frontiera' else ''}
-│   │   │   └── utils/         Constants, RequestCtx, Utility, JsonUtils, MessageTypeEnum{''.join([chr(10) + '│   │   │   ├── client/        SampleDgClient' if svc_type == 'frontiera' else '', chr(10) + '│   │   │   ├── domain/        ' + to_class_prefix(sn) + 'Entity, RevisionInfo' if svc_type == 'datagateway' else '', chr(10) + '│   │   │   ├── repository/    ' + to_class_prefix(sn) + 'Repository' if svc_type == 'datagateway' else '', chr(10) + '│   │   │   ├── mapper/        ' + to_class_prefix(sn) + 'Mapper' if svc_type == 'datagateway' else '', chr(10) + '│   │   │   └── scheduler/     ScheduledJob, ShedLockConfig' if svc_type == 'datagateway' else ''])}
+│   │   │   └── utils/         Constants, RequestCtx, Utility, MessageTypeEnum{''.join([chr(10) + '│   │   │   ├── client/        SampleDgClient' if svc_type == 'frontiera' else '', chr(10) + '│   │   │   ├── domain/        ' + to_class_prefix(sn) + 'Entity, RevisionInfo' if svc_type == 'datagateway' else '', chr(10) + '│   │   │   ├── repository/    ' + to_class_prefix(sn) + 'Repository' if svc_type == 'datagateway' else '', chr(10) + '│   │   │   ├── mapper/        ' + to_class_prefix(sn) + 'Mapper' if svc_type == 'datagateway' else '', chr(10) + '│   │   │   └── scheduler/     ScheduledJob, ShedLockConfig' if svc_type == 'datagateway' else ''])}
 │   │   └── resources/
 │   │       ├── application.properties
 │   │       └── db/migration/  V1__CREATE_TABLES.sql{'  ← solo DG' if svc_type == 'datagateway' else '  ← assente nel Frontiera'}
@@ -4995,6 +4997,7 @@ def scaffold_library(lib_name: str, lib_pkg: str, output_dir: str) -> None:
     write(java / "util"         / "AuthorizationUtils.java", gen_lib_authorization_utils(lib_pkg))
     write(java / "util"         / "B2BTokenUtils.java",     gen_lib_b2b_token_utils(lib_pkg))
     write(java / "util"         / "CacheUtils.java",        gen_lib_cache_utils(lib_pkg))
+    write(java / "util"         / "JsonUtils.java",         gen_json_utils(f"{lib_pkg}.util"))
     write(java / "client"       / "DataPlatformClient.java",gen_lib_data_platform_client(lib_pkg))
     write(java / "config"       / "CustomHttpClient.java",  gen_lib_custom_http_client(lib_pkg))
     write(java / "cache"        / "AdsfTokenCache.java",    gen_lib_adsf_token_cache(lib_pkg))
@@ -5032,7 +5035,6 @@ def scaffold_service_dg(sn: str, pkg: str, output_dir: str,
     write(java / "utils"     / "Constants.java",                  gen_constants_dg(pkg, sn))
     write(java / "utils"     / "RequestCtx.java",                 gen_request_ctx(pkg))
     write(java / "utils"     / "Utility.java",                    gen_utility_dg(pkg))
-    write(java / "utils"     / "JsonUtils.java",                  gen_json_utils(pkg))
     write(java / "utils"     / "MessageTypeEnum.java",            gen_message_type_enum(pkg))
 
     write(java / "exception" / "RemoteCallException.java",        gen_remote_call_exception(pkg))
@@ -5046,12 +5048,12 @@ def scaffold_service_dg(sn: str, pkg: str, output_dir: str,
 
     write(java / "health"    / "ApplicationHealthCheck.java",     gen_health_check(pkg))
 
-    write(java / "kafka"     / "KafkaGenericProducer.java",       gen_kafka_producer_dg(pkg))
+    write(java / "kafka"     / "KafkaGenericProducer.java",       gen_kafka_producer_dg(pkg, lib_pkg))
     write(java / "kafka"     / "KafkaGenericConsumer.java",       gen_kafka_consumer_dg(pkg, sn))
     write(java / "kafka"     / "DevKafkaTopicInitializer.java",   gen_dev_kafka_topic_initializer(pkg))
 
     write(java / "service"   / "TopicService.java",               gen_topic_service(pkg))
-    write(java / "service"   / f"{to_class_prefix(sn)}Service.java", gen_sample_service_dg(pkg, sn))
+    write(java / "service"   / f"{to_class_prefix(sn)}Service.java", gen_sample_service_dg(pkg, sn, lib_pkg))
 
     write(java / "domain"    / f"{to_class_prefix(sn)}Entity.java", gen_domain_entity(pkg, sn))
     write(java / "domain"    / "RevisionInfo.java",               gen_revision_info(pkg))
@@ -5089,7 +5091,6 @@ def scaffold_service(sn: str, pkg: str, output_dir: str,
     write(java / "utils"    / "Constants.java",                gen_constants(pkg, sn))
     write(java / "utils"    / "RequestCtx.java",               gen_request_ctx(pkg))
     write(java / "utils"    / "Utility.java",                  gen_utility(pkg))
-    write(java / "utils"    / "JsonUtils.java",                gen_json_utils(pkg))
     write(java / "utils"    / "MessageTypeEnum.java",          gen_message_type_enum(pkg))
 
     write(java / "exception"/ "RemoteCallException.java",      gen_remote_call_exception(pkg))
@@ -5110,7 +5111,7 @@ def scaffold_service(sn: str, pkg: str, output_dir: str,
 
     write(java / "health"   / "ApplicationHealthCheck.java",   gen_health_check(pkg))
 
-    write(java / "kafka"    / "KafkaGenericProducer.java",     gen_kafka_producer(pkg))
+    write(java / "kafka"    / "KafkaGenericProducer.java",     gen_kafka_producer(pkg, lib_pkg))
     write(java / "kafka"    / "KafkaGenericConsumer.java",     gen_kafka_consumer(pkg))
     write(java / "kafka"    / "DevKafkaTopicInitializer.java", gen_dev_kafka_topic_initializer(pkg))
 
