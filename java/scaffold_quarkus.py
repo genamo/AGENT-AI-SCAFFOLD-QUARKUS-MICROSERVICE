@@ -358,42 +358,51 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-public interface Constants {{
+public final class Constants {{
 
-    String TIMESTAMP_FORMAT = "yyyyMMddHHmmssSSS";
-    String MSG_ERROR = "Error";
+    private Constants() {{}}
 
-    interface Headers {{
-        String TRANSACTION_ID = "TRANSACTION-ID";
-        String KEYLOGIC       = "KEY-LOGIC";
-        String MOD_ASYNC      = "MOD-ASYNC";
-        String PROCESS_TYPE   = "PROCESS-TYPE";
-        String JWT            = "JWT";
-        String AUTHORIZATION  = "Authorization";
+    public static final String TIMESTAMP_FORMAT = "yyyyMMddHHmmssSSS";
+    public static final String MSG_ERROR = "Error";
+
+    public static final class Headers {{
+        private Headers() {{}}
+        public static final String TRANSACTION_ID = "TRANSACTION-ID";
+        public static final String KEYLOGIC       = "KEY-LOGIC";
+        public static final String MOD_ASYNC      = "MOD-ASYNC";
+        public static final String PROCESS_TYPE   = "PROCESS-TYPE";
+        public static final String MESSAGE_KEY    = "MESSAGE-KEY";
+        public static final String CONTENT_TYPE   = "content-type";
+        public static final String JWT            = "JWT";
+        public static final String AUTHORIZATION  = "Authorization";
     }}
 
-    interface LogParams {{
-        String TN = "TN";
-        String KL = "KL";
-        String API = "API";
-        String MK = "MK";
-        String PT = "PT";
-        String MA = "MA";
+    public static final class LogParams {{
+        private LogParams() {{}}
+        public static final String TN = "TN";
+        public static final String KL = "KL";
+        public static final String API = "API";
+        public static final String MK = "MK";
+        public static final String PT = "PT";
+        public static final String MA = "MA";
     }}
 
-    interface MEDIATYPE {{
-        String APP_JSON = "application/json";
+    public static final class MEDIATYPE {{
+        private MEDIATYPE() {{}}
+        public static final String APP_JSON = "application/json";
     }}
 
-    interface Topic {{
-        String {topic_const} = "{topic_val}";
+    public static final class Topic {{
+        private Topic() {{}}
+        public static final String {topic_const} = "{topic_val}";
 
-        static List<String> getAllTopicsValue() throws IllegalArgumentException, IllegalAccessException {{
+        public static List<String> getAllTopicsValue() throws IllegalArgumentException, IllegalAccessException {{
             List<Field> fields = Arrays.asList(Constants.Topic.class.getDeclaredFields());
             List<String> topics = new ArrayList<>();
             for (Field field : fields) {{
-                Object object = field.get(null);
-                if (object instanceof String) topics.add((String) object);
+                if (field.getType() == String.class) {{
+                    topics.add((String) field.get(null));
+                }}
             }}
             return topics;
         }}
@@ -447,6 +456,8 @@ import jakarta.ws.rs.core.Response;
 
 @ApplicationScoped
 public class Utility {{
+
+    private static final String MSG_TYPE_ERROR = "ERROR";
 
     @Inject
     RequestHeadersContext headersCtx;
@@ -580,7 +591,7 @@ public class Utility {{
         GenericResponse<T> gr = baseGeneric(path);
         gr.setExecutionTime(executionTime());
         Message m = new Message();
-        m.setMessageType("ERROR"); m.setMessageCode("NOT_FOUND"); m.setMessageDescription(message);
+        m.setMessageType(MSG_TYPE_ERROR); m.setMessageCode("NOT_FOUND"); m.setMessageDescription(message);
         gr.setMessage(m);
         return withCommonHeaders(Response.status(Response.Status.NOT_FOUND).entity(gr)).build();
     }}
@@ -602,7 +613,7 @@ public class Utility {{
         GenericResponse<T> gr = baseGeneric(path);
         gr.setExecutionTime(executionTime());
         Message m = new Message();
-        m.setMessageType("ERROR"); m.setMessageCode("BAD_REQUEST"); m.setMessageDescription(message);
+        m.setMessageType(MSG_TYPE_ERROR); m.setMessageCode("BAD_REQUEST"); m.setMessageDescription(message);
         gr.setMessage(m);
         return withCommonHeaders(Response.status(Response.Status.BAD_REQUEST).entity(gr)).build();
     }}
@@ -616,7 +627,7 @@ public class Utility {{
         GenericResponse<T> gr = baseGeneric(path);
         gr.setExecutionTime(executionTime());
         Message m = new Message();
-        m.setMessageType("ERROR"); m.setMessageCode("BAD_GATEWAY"); m.setMessageDescription(e.getMessage());
+        m.setMessageType(MSG_TYPE_ERROR); m.setMessageCode("BAD_GATEWAY"); m.setMessageDescription(e.getMessage());
         gr.setMessage(m);
         return withCommonHeaders(Response.status(Response.Status.BAD_GATEWAY).entity(gr)).build();
     }}
@@ -634,13 +645,13 @@ public class Utility {{
     // =========================
 
     public <T> Response okOrNotFound(Optional<T> opt, String notFoundMessage) {{
-        if (opt == null || opt.isEmpty()) return notFound(notFoundMessage);
-        return ok(opt.get());
+        if (opt != null && opt.isPresent()) return ok(opt.get());
+        return notFound(notFoundMessage);
     }}
 
     public <T> Response okOrNotFoundWithCustomMessage(Optional<T> opt, Message customMessage) {{
-        if (opt == null || opt.isEmpty()) return notFoundWithMessageCustom(customMessage);
-        return okWithMessageCustom(opt.get(), customMessage);
+        if (opt != null && opt.isPresent()) return okWithMessageCustom(opt.get(), customMessage);
+        return notFoundWithMessageCustom(customMessage);
     }}
 
     public <T> Response okOrEmpty(List<T> list) {{
@@ -848,8 +859,7 @@ import lombok.NoArgsConstructor;
 @JsonInclude(Include.NON_EMPTY)
 public class GenericResponse<T> implements Serializable {{
     private static final long serialVersionUID = 5007807046893745317L;
-    private T data;
-    private String status;
+    private transient T data;
     private String executionTime;
     private String timestamp;
     private Integer numberOfElements;
@@ -910,7 +920,7 @@ public class CustomResponse<T> implements Serializable {{
 
     private static final long serialVersionUID = 5007805106893745317L;
 
-    private T responseData;
+    private transient T responseData;
     @JsonInclude(Include.NON_NULL)
     private Message message;
 
@@ -994,7 +1004,7 @@ public class MdcHeadersFilter implements ContainerRequestFilter, ContainerRespon
             String kl  = (String) req.getProperty(PROP_KL);
             String tid = (String) req.getProperty(PROP_TID);
             Object maObj = req.getProperty(PROP_MOD_ASYNC);
-            boolean ma = (maObj instanceof Boolean b) ? b : false;
+            boolean ma = maObj instanceof Boolean b && b;
             String pt  = (String) req.getProperty(PROP_PROCESS_TYPE);
 
             resp.getHeaders().putSingle(Constants.Headers.KEYLOGIC,       kl);
@@ -1244,6 +1254,50 @@ public class ApplicationHealthCheck {{
 """
 
 
+def gen_abstract_service(pkg):
+    return f"""\
+package {pkg}.service;
+
+import org.jboss.logging.Logger;
+
+import {pkg}.exception.RemoteCallException;
+import {pkg}.filter.RequestHeadersContext;
+import jakarta.inject.Inject;
+import jakarta.ws.rs.core.Response;
+
+public abstract class AbstractService {{
+
+    @Inject
+    protected RequestHeadersContext headersCtx;
+
+    protected static String safeReadBody(Response resp) {{
+        try {{
+            return resp.hasEntity() ? resp.readEntity(String.class) : "";
+        }} catch (Exception e) {{
+            return "";
+        }}
+    }}
+
+    protected RemoteCallException remoteError(String operation, int status, Response resp) {{
+        String body = safeReadBody(resp);
+        Logger.getLogger(getClass()).errorf(
+                "%s fallita. KL=%s TID=%s PT=%s HTTP=%d body=%s",
+                operation,
+                headersCtx.getKeyLogic(),
+                headersCtx.getTransactionId(),
+                headersCtx.getProcessType(),
+                status,
+                body
+        );
+        return new RemoteCallException(
+                operation + " errore HTTP " + status +
+                        (body.isBlank() ? "" : (" - " + body))
+        );
+    }}
+}}
+"""
+
+
 def gen_topic_service(pkg):
     return f"""\
 package {pkg}.service;
@@ -1347,9 +1401,14 @@ public class KafkaGenericProducer {{
         }}
         send(topicService.getRealTopic(topic), messageKey,
                 JsonUtils.writeAsJsonPrettyLogStringWithoutNull(payload),
-                Map.of("TRANSACTION-ID", transId, "KEY-LOGIC", keyLogic,
-                       "PROCESS-TYPE", processType, "FLOW", flow,
-                       "MESSAGE-KEY", messageKey, "content-type", "application/json"));
+                Map.of(
+                    Constants.Headers.TRANSACTION_ID, transId,
+                    Constants.Headers.KEYLOGIC,       keyLogic,
+                    Constants.Headers.PROCESS_TYPE,   processType,
+                    "FLOW",                            flow,
+                    Constants.Headers.MESSAGE_KEY,    messageKey,
+                    Constants.Headers.CONTENT_TYPE,   Constants.MEDIATYPE.APP_JSON
+                ));
     }}
 
     public void sendEventWithHeaders(String transId, String keyLogic, String processType,
@@ -1357,9 +1416,14 @@ public class KafkaGenericProducer {{
         String messageKey = UUID.randomUUID().toString();
         send(topicService.getRealTopic(topic), messageKey,
                 JsonUtils.writeAsJsonPrettyLogStringWithoutNull(payload),
-                Map.of("TRANSACTION-ID", transId, "KEY-LOGIC", keyLogic,
-                       "PROCESS-TYPE", processType, "FLOW", flow,
-                       "MESSAGE-KEY", messageKey, "content-type", "application/json"));
+                Map.of(
+                    Constants.Headers.TRANSACTION_ID, transId,
+                    Constants.Headers.KEYLOGIC,       keyLogic,
+                    Constants.Headers.PROCESS_TYPE,   processType,
+                    "FLOW",                            flow,
+                    Constants.Headers.MESSAGE_KEY,    messageKey,
+                    Constants.Headers.CONTENT_TYPE,   Constants.MEDIATYPE.APP_JSON
+                ));
     }}
 
     // ======================================================
@@ -1380,12 +1444,12 @@ public class KafkaGenericProducer {{
     private Map<String, String> headersMap(String transId, String keyLogic, String processType,
                                            String flow, String messageKey) {{
         return Map.of(
-            "TRANSACTION-ID", transId,
-            "KEY-LOGIC",      keyLogic,
-            "PROCESS-TYPE",   processType,
-            "FLOW",           flow,
-            "MESSAGE-KEY",    messageKey,
-            "content-type",   "application/json"
+            Constants.Headers.TRANSACTION_ID, transId,
+            Constants.Headers.KEYLOGIC,       keyLogic,
+            Constants.Headers.PROCESS_TYPE,   processType,
+            "FLOW",                            flow,
+            Constants.Headers.MESSAGE_KEY,    messageKey,
+            Constants.Headers.CONTENT_TYPE,   Constants.MEDIATYPE.APP_JSON
         );
     }}
 
@@ -1655,14 +1719,13 @@ import io.smallrye.common.annotation.RunOnVirtualThread;
 import {pkg}.client.SampleDgClient;
 import {pkg}.dto.SampleDTO;
 import {pkg}.exception.RemoteCallException;
-import {pkg}.filter.RequestHeadersContext;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.core.Response;
 
 @ApplicationScoped
 @RunOnVirtualThread
-public class SampleService {{
+public class SampleService extends AbstractService {{
 
     private static final Logger LOG = Logger.getLogger(SampleService.class);
 
@@ -1674,10 +1737,6 @@ public class SampleService {{
 
     @Inject
     ObjectMapper objectMapper;
-
-    // ✅ Context CDI: propaga KL/TID/PT nel logging e negli header client
-    @Inject
-    RequestHeadersContext headersCtx;
 
     // =========================
     // GET ALL
@@ -1759,32 +1818,8 @@ public class SampleService {{
             throw new RemoteCallException("Impossibile deserializzare lista SampleDTO", e);
         }}
     }}
-
-    private String safeReadBody(Response resp) {{
-        try {{
-            return resp.hasEntity() ? resp.readEntity(String.class) : "";
-        }} catch (Exception e) {{
-            return "";
-        }}
-    }}
-
-    private RemoteCallException remoteError(String operation, int status, Response resp) {{
-        String body = safeReadBody(resp);
-        LOG.errorf("%s fallita. KL=%s TID=%s PT=%s HTTP=%d body=%s",
-                operation,
-                headersCtx.getKeyLogic(),
-                headersCtx.getTransactionId(),
-                headersCtx.getProcessType(),
-                status,
-                body
-        );
-        return new RemoteCallException(
-                operation + " errore HTTP " + status + (body.isBlank() ? "" : (" - " + body))
-        );
-    }}
 }}
 """
-
 
 def gen_sample_resource(pkg, sn, lib_pkg):
     prefix = re.sub(r"[-_]", "", sn[:3].lower())
@@ -1918,6 +1953,137 @@ class SampleResourceTest {{
             .header("keyLogic","test-kl").header("transactionId","test-tid")
             .when().get("/{prefix}_sample_getbyid")
             .then().statusCode(400);
+    }}
+}}
+"""
+
+
+def gen_mockito_extensions_file():
+    """Creates src/test/resources/mockito-extensions/org.mockito.plugins.MockMaker — enables MockedStatic."""
+    return "mock-maker-inline\n"
+
+
+def gen_utility_instance_test(pkg):
+    return f"""\
+package {pkg}.test.utils;
+
+import java.util.Optional;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.MockedStatic;
+import org.mockito.junit.jupiter.MockitoExtension;
+
+import {pkg}.exception.RemoteCallException;
+import {pkg}.filter.RequestHeadersContext;
+import {pkg}.response.GenericResponse.Message;
+import {pkg}.utils.Utility;
+import jakarta.ws.rs.core.Response;
+
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.*;
+
+@ExtendWith(MockitoExtension.class)
+class UtilityInstanceTest {{
+
+    @Mock RequestHeadersContext headersCtx;
+    @InjectMocks Utility utility;
+
+    @BeforeEach
+    void setupContext() {{
+        lenient().when(headersCtx.getPath()).thenReturn("/test");
+        lenient().when(headersCtx.getStartNanos()).thenReturn(System.nanoTime() - 1_000_000L);
+        lenient().when(headersCtx.getKeyLogic()).thenReturn("kl");
+        lenient().when(headersCtx.getTransactionId()).thenReturn("tid");
+        lenient().when(headersCtx.isModAsync()).thenReturn(false);
+        lenient().when(headersCtx.getProcessType()).thenReturn("BATCH");
+    }}
+
+    private Response.ResponseBuilder stubBuilder() {{
+        Response.ResponseBuilder builder = mock(Response.ResponseBuilder.class);
+        Response response = mock(Response.class);
+        lenient().when(builder.entity(any())).thenReturn(builder);
+        lenient().when(builder.header(anyString(), any())).thenReturn(builder);
+        lenient().when(builder.build()).thenReturn(response);
+        return builder;
+    }}
+
+    @Test
+    void notFound_setsMessageTypeError() {{
+        Response.ResponseBuilder builder = stubBuilder();
+        try (MockedStatic<Response> mockedResp = mockStatic(Response.class)) {{
+            mockedResp.when(() -> Response.status(Response.Status.NOT_FOUND)).thenReturn(builder);
+            Response result = utility.notFound("not found");
+            assertNotNull(result);
+        }}
+    }}
+
+    @Test
+    void badRequest_setsMessageTypeError() {{
+        Response.ResponseBuilder builder = stubBuilder();
+        try (MockedStatic<Response> mockedResp = mockStatic(Response.class)) {{
+            mockedResp.when(() -> Response.status(Response.Status.BAD_REQUEST)).thenReturn(builder);
+            Response result = utility.badRequest("bad request");
+            assertNotNull(result);
+        }}
+    }}
+
+    @Test
+    void badGateway_setsMessageTypeError() {{
+        Response.ResponseBuilder builder = stubBuilder();
+        RemoteCallException ex = new RemoteCallException("upstream error");
+        try (MockedStatic<Response> mockedResp = mockStatic(Response.class)) {{
+            mockedResp.when(() -> Response.status(Response.Status.BAD_GATEWAY)).thenReturn(builder);
+            Response result = utility.badGateway(ex);
+            assertNotNull(result);
+        }}
+    }}
+
+    @Test
+    void okOrNotFound_emptyOptional_callsNotFound() {{
+        Response.ResponseBuilder builder = stubBuilder();
+        try (MockedStatic<Response> mockedResp = mockStatic(Response.class)) {{
+            mockedResp.when(() -> Response.status(Response.Status.NOT_FOUND)).thenReturn(builder);
+            Response result = utility.okOrNotFound(Optional.empty(), "not found");
+            assertNotNull(result);
+        }}
+    }}
+
+    @Test
+    void okOrNotFound_presentOptional_callsOk() {{
+        Response.ResponseBuilder builder = stubBuilder();
+        try (MockedStatic<Response> mockedResp = mockStatic(Response.class)) {{
+            mockedResp.when(() -> Response.ok(any())).thenReturn(builder);
+            Response result = utility.okOrNotFound(Optional.of("data"), "not found");
+            assertNotNull(result);
+        }}
+    }}
+
+    @Test
+    void okOrNotFoundWithCustomMessage_emptyOptional_callsNotFound() {{
+        Response.ResponseBuilder builder = stubBuilder();
+        Message msg = new Message();
+        try (MockedStatic<Response> mockedResp = mockStatic(Response.class)) {{
+            mockedResp.when(() -> Response.status(Response.Status.NOT_FOUND)).thenReturn(builder);
+            Response result = utility.okOrNotFoundWithCustomMessage(Optional.empty(), msg);
+            assertNotNull(result);
+        }}
+    }}
+
+    @Test
+    void okOrNotFoundWithCustomMessage_presentOptional_callsOkWithMessage() {{
+        Response.ResponseBuilder builder = stubBuilder();
+        Message msg = new Message();
+        try (MockedStatic<Response> mockedResp = mockStatic(Response.class)) {{
+            mockedResp.when(() -> Response.ok(any())).thenReturn(builder);
+            Response result = utility.okOrNotFoundWithCustomMessage(Optional.of("data"), msg);
+            assertNotNull(result);
+        }}
     }}
 }}
 """
@@ -3185,21 +3351,29 @@ public class DevKafkaTopicInitializer {{
 
             CreateTopicsResult result = admin.createTopics(topicsToCreate);
             for (NewTopic nt : topicsToCreate) {{
-                try {{
-                    result.values().get(nt.name()).get(ADMIN_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-                    LOG.infof("Kafka DEV topic created: %s (partitions=%d, rf=%d)",
-                            nt.name(), partitions, replicationFactor);
-                }} catch (ExecutionException ee) {{
-                    Throwable cause = ee.getCause();
-                    if (cause instanceof TopicExistsException) {{
-                        LOG.infof("Kafka DEV topic already exists (race ignored): %s", nt.name());
-                    }} else {{
-                        LOG.errorf(cause, "Error creating Kafka DEV topic: %s", nt.name());
-                    }}
-                }}
+                waitForTopicCreation(result, nt);
             }}
         }} catch (Exception e) {{
             LOG.error("Error while creating Kafka topics in DEV", e);
+        }}
+    }}
+
+    private void waitForTopicCreation(CreateTopicsResult result, NewTopic nt)
+            throws java.util.concurrent.TimeoutException {{
+        try {{
+            result.values().get(nt.name()).get(ADMIN_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            LOG.infof("Kafka DEV topic created: %s (partitions=%d, rf=%d)",
+                    nt.name(), partitions, replicationFactor);
+        }} catch (InterruptedException ie) {{
+            Thread.currentThread().interrupt();
+            LOG.warnf("Interrupted while waiting for Kafka DEV topic creation: %s", nt.name());
+        }} catch (ExecutionException ee) {{
+            Throwable cause = ee.getCause();
+            if (cause instanceof TopicExistsException) {{
+                LOG.infof("Kafka DEV topic already exists (race ignored): %s", nt.name());
+            }} else {{
+                LOG.errorf(cause, "Error creating Kafka DEV topic: %s", nt.name());
+            }}
         }}
     }}
 }}
@@ -5115,11 +5289,18 @@ def scaffold_service(sn: str, pkg: str, output_dir: str,
     write(java / "kafka"    / "KafkaGenericConsumer.java",     gen_kafka_consumer(pkg))
     write(java / "kafka"    / "DevKafkaTopicInitializer.java", gen_dev_kafka_topic_initializer(pkg))
 
+    write(java / "service"  / "AbstractService.java",          gen_abstract_service(pkg))
     write(java / "service"  / "TopicService.java",             gen_topic_service(pkg))
     write(java / "service"  / "SampleService.java",            gen_sample_service(pkg, lib_pkg))
     write(java / "client"   / "SampleDgClient.java",           gen_sample_client(pkg, sn))
     write(java / "dto"      / "SampleDTO.java",                gen_sample_dto(pkg))
     write(java / "resource" / "SampleResource.java",           gen_sample_resource(pkg, sn, lib_pkg))
+
+    test_java = root / "src" / "test" / "java" / pkg_to_path(pkg)
+    write(test_java / "test" / "NoSecurityTestProfile.java",         gen_no_security_test_profile(pkg))
+    write(test_java / "test" / "resource" / "SampleResourceTest.java", gen_sample_resource_test(pkg, sn))
+    write(test_java / "test" / "utils" / "UtilityInstanceTest.java",   gen_utility_instance_test(pkg))
+    write(test_res / "mockito-extensions" / "org.mockito.plugins.MockMaker", gen_mockito_extensions_file())
 
     write(root / "info.yaml",                                   gen_info_yaml(sn, pkg, "frontiera", lib_group, lib_artifact))
     write(root / "README.md",                                   gen_readme(sn, pkg, "frontiera", lib_group, lib_artifact))
