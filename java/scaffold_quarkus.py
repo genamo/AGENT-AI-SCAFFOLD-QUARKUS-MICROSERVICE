@@ -95,6 +95,8 @@ def gen_pom(sn, pkg, lib_group, lib_artifact):
         <sonar.java.coveragePlugin>jacoco</sonar.java.coveragePlugin>
         <sonar.dynamicAnalysis>reuseReports</sonar.dynamicAnalysis>
         <sonar.language>java</sonar.language>
+        <sonar.coverage.jacoco.xmlReportPaths>target/site/jacoco/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
+        <quarkus.package.type>jar</quarkus.package.type>
         <argLine/>
     </properties>
 
@@ -111,7 +113,7 @@ def gen_pom(sn, pkg, lib_group, lib_artifact):
     </dependencyManagement>
 
     <dependencies>
-        <!-- Common Library -->
+        <!-- PMR Common Library -->
         <dependency>
             <groupId>{lib_group}</groupId>
             <artifactId>{lib_artifact}</artifactId>
@@ -180,7 +182,7 @@ def gen_pom(sn, pkg, lib_group, lib_artifact):
             <plugin>
                 <groupId>org.jacoco</groupId><artifactId>jacoco-maven-plugin</artifactId><version>0.8.14</version>
                 <executions>
-                    <execution><id>prepare-agent</id><goals><goal>prepare-agent</goal></goals><phase>initialize</phase></execution>
+                    <execution><id>prepare-agent</id><goals><goal>prepare-agent</goal></goals></execution>
                     <execution><id>report</id><goals><goal>report</goal></goals><phase>verify</phase></execution>
                 </executions>
             </plugin>
@@ -850,6 +852,7 @@ import org.eclipse.microprofile.openapi.annotations.media.Schema;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonInclude.Include;
 import {pkg}.utils.MessageTypeEnum;
+import {pkg}.response.ResponseStatus;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -860,6 +863,7 @@ import lombok.NoArgsConstructor;
 public class GenericResponse<T> implements Serializable {{
     private static final long serialVersionUID = 5007807046893745317L;
     private transient T data;
+    private String status;
     private String executionTime;
     private String timestamp;
     private Integer numberOfElements;
@@ -1193,6 +1197,8 @@ def gen_openapi_config(pkg, sn):
     return f"""\
 package {pkg}.config;
 
+import jakarta.ws.rs.ApplicationPath;
+import jakarta.ws.rs.core.Application;
 import org.eclipse.microprofile.openapi.annotations.OpenAPIDefinition;
 import org.eclipse.microprofile.openapi.annotations.enums.ParameterIn;
 import org.eclipse.microprofile.openapi.annotations.enums.SecuritySchemeType;
@@ -1202,6 +1208,7 @@ import org.eclipse.microprofile.openapi.annotations.security.SecurityRequirement
 import org.eclipse.microprofile.openapi.annotations.security.SecurityScheme;
 import org.eclipse.microprofile.openapi.annotations.servers.Server;
 
+@ApplicationPath("/")
 @OpenAPIDefinition(
     info = @Info(title = "{title}", version = "1.0"),
     servers = @Server(url = "/"),
@@ -1355,6 +1362,7 @@ import org.jboss.logging.Logger;
 import io.smallrye.reactive.messaging.kafka.api.OutgoingKafkaRecordMetadata;
 import {pkg}.filter.RequestHeadersContext;
 import {pkg}.service.TopicService;
+import {pkg}.utils.Constants;
 import {lib_pkg}.util.JsonUtils;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -1928,7 +1936,6 @@ public class NoSecurityTestProfile implements QuarkusTestProfile {{
 
 
 def gen_sample_resource_test(pkg, sn):
-    prefix = re.sub(r"[-_]", "", sn[:3].lower())
     return f"""\
 package {pkg}.test.resource;
 
@@ -1939,20 +1946,24 @@ import org.junit.jupiter.api.Test;
 import {pkg}.test.NoSecurityTestProfile;
 import static org.hamcrest.Matchers.*;
 
+/**
+ * Test di integrazione Quarkus — verifica che l'applicazione si avvii
+ * e che l'endpoint /health risponda correttamente.
+ *
+ * I test REST sulle risorse di business (SampleResource) vanno scritti
+ * usando @InjectMock per mockare i client REST esterni, oppure lanciando
+ * un WireMock per simulare i servizi downstream.
+ */
 @QuarkusTest
 @TestProfile(NoSecurityTestProfile.class)
 class SampleResourceTest {{
-    @Test void testGetAll_shouldReturn200Or204() {{
+
+    @Test
+    void applicationStarts_healthEndpointShouldReturn200() {{
         RestAssured.given()
-            .header("keyLogic","test-kl").header("transactionId","test-tid").header("processType","TEST")
-            .when().get("/{prefix}_sample_getall")
-            .then().statusCode(anyOf(is(200),is(204)));
-    }}
-    @Test void testGetById_missingId_shouldReturn400() {{
-        RestAssured.given()
-            .header("keyLogic","test-kl").header("transactionId","test-tid")
-            .when().get("/{prefix}_sample_getbyid")
-            .then().statusCode(400);
+            .when().get("/q/health")
+            .then().statusCode(200)
+            .body("status", equalTo("UP"));
     }}
 }}
 """
@@ -2089,6 +2100,89 @@ class UtilityInstanceTest {{
 """
 
 
+def gen_utility_instance_test_dg(pkg):
+    """Test DG: Utility è completamente statica, si testano i metodi helper puri."""
+    return f"""\
+package {pkg}.test.utils;
+
+import org.junit.jupiter.api.Test;
+
+import {pkg}.utils.Utility;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class UtilityInstanceTest {{
+
+    @Test
+    void defaultUuidIfBlank_nullInput_returnsUuid() {{
+        String result = Utility.defaultUuidIfBlank(null);
+        assertNotNull(result);
+        assertFalse(result.isBlank());
+    }}
+
+    @Test
+    void defaultUuidIfBlank_blankInput_returnsUuid() {{
+        String result = Utility.defaultUuidIfBlank("   ");
+        assertNotNull(result);
+        assertFalse(result.isBlank());
+    }}
+
+    @Test
+    void defaultUuidIfBlank_validInput_returnsInput() {{
+        assertEquals("my-id", Utility.defaultUuidIfBlank("my-id"));
+    }}
+
+    @Test
+    void defaultIfBlank_nullInput_returnsDefault() {{
+        assertEquals("default", Utility.defaultIfBlank(null, "default"));
+    }}
+
+    @Test
+    void defaultIfBlank_blankInput_returnsDefault() {{
+        assertEquals("default", Utility.defaultIfBlank("  ", "default"));
+    }}
+
+    @Test
+    void defaultIfBlank_validInput_returnsInput() {{
+        assertEquals("value", Utility.defaultIfBlank("value", "default"));
+    }}
+
+    @Test
+    void parseBooleanOrDefault_trueString_returnsTrue() {{
+        assertTrue(Utility.parseBooleanOrDefault("true", false));
+    }}
+
+    @Test
+    void parseBooleanOrDefault_falseString_returnsFalse() {{
+        assertFalse(Utility.parseBooleanOrDefault("false", true));
+    }}
+
+    @Test
+    void parseBooleanOrDefault_nullInput_returnsDefault() {{
+        assertTrue(Utility.parseBooleanOrDefault(null, true));
+    }}
+
+    @Test
+    void safe_nullInput_returnsNullString() {{
+        assertEquals("null", Utility.safe(null));
+    }}
+
+    @Test
+    void safe_blankInput_returnsBlankString() {{
+        assertEquals("blank", Utility.safe("  "));
+    }}
+
+    @Test
+    void safe_longInput_isTruncated() {{
+        String longStr = "x".repeat(200);
+        String result = Utility.safe(longStr);
+        assertTrue(result.length() <= 125);
+        assertTrue(result.endsWith("..."));
+    }}
+}}
+"""
+
+
 def gen_svc_dockerfile(sn):
     return f"""\
 FROM registry.access.redhat.com/ubi8/openjdk-21:1.18
@@ -2140,6 +2234,8 @@ def gen_pom_dg(sn, pkg, lib_group, lib_artifact):
         <sonar.java.coveragePlugin>jacoco</sonar.java.coveragePlugin>
         <sonar.dynamicAnalysis>reuseReports</sonar.dynamicAnalysis>
         <sonar.language>java</sonar.language>
+        <sonar.coverage.jacoco.xmlReportPaths>target/site/jacoco/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
+        <quarkus.package.type>jar</quarkus.package.type>
         <argLine/>
     </properties>
 
@@ -2191,6 +2287,7 @@ def gen_pom_dg(sn, pkg, lib_group, lib_artifact):
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-cache</artifactId></dependency>
         <!-- SECURITY -->
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-oidc</artifactId></dependency>
+        <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-smallrye-jwt</artifactId></dependency>
         <!-- OBSERVABILITY -->
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-smallrye-health</artifactId></dependency>
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-micrometer-registry-prometheus</artifactId></dependency>
@@ -2211,6 +2308,7 @@ def gen_pom_dg(sn, pkg, lib_group, lib_artifact):
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-junit5-mockito</artifactId><scope>test</scope></dependency>
         <dependency><groupId>io.rest-assured</groupId><artifactId>rest-assured</artifactId><scope>test</scope></dependency>
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-jdbc-h2</artifactId><scope>test</scope></dependency>
+        <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-panache-mock</artifactId><scope>test</scope></dependency>
     </dependencies>
 
     <build>
@@ -2240,7 +2338,7 @@ def gen_pom_dg(sn, pkg, lib_group, lib_artifact):
             <plugin>
                 <groupId>org.jacoco</groupId><artifactId>jacoco-maven-plugin</artifactId><version>0.8.14</version>
                 <executions>
-                    <execution><id>prepare-agent</id><goals><goal>prepare-agent</goal></goals><phase>initialize</phase></execution>
+                    <execution><id>prepare-agent</id><goals><goal>prepare-agent</goal></goals></execution>
                     <execution><id>report</id><goals><goal>report</goal></goals><phase>verify</phase></execution>
                 </executions>
             </plugin>
@@ -2372,7 +2470,12 @@ mp.openapi.filter={pkg}.filter.GlobalHeadersOpenApiFilter
 # SCHEDULER
 ############################################
 quarkus.scheduler.enabled=true
-cron.clean.sample=0 0 5 * * ?
+
+############################################
+# SHEDLOCK (cluster-safe distributed lock)
+############################################
+# Tabella shedlock deve esistere in DB (vedi V1__CREATE_TABLES.sql)
+# La tabella viene usata da ShedLockConfig (JdbcTemplateLockProvider)
 
 ############################################
 # DEV PROFILE
@@ -3380,6 +3483,140 @@ public class DevKafkaTopicInitializer {{
 """
 
 
+
+def gen_cron_job_configuration(pkg):
+    return f"""\
+package {pkg}.domain;
+
+import java.io.Serializable;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+@Entity
+@Table(name = "cron_jobs_configuration", schema = "dbo",
+       uniqueConstraints = @UniqueConstraint(name = "uk_cron_jobs_configuration", columnNames = "job_name"))
+public class CronJobConfiguration implements Serializable {{
+
+    private static final long serialVersionUID = 1L;
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @Column(name = "id", nullable = false)
+    private Long id;
+
+    @Column(name = "job_name", nullable = false, length = 100)
+    private String jobName;
+
+    @Column(name = "cron_expression", nullable = false, length = 50)
+    private String cronExpression;
+}}
+"""
+
+
+def gen_cron_job_configuration_repository(pkg):
+    return f"""\
+package {pkg}.repository;
+
+import java.util.List;
+
+import io.quarkus.hibernate.orm.panache.PanacheRepository;
+import {pkg}.domain.CronJobConfiguration;
+import jakarta.enterprise.context.ApplicationScoped;
+
+@ApplicationScoped
+public class CronJobConfigurationRepository implements PanacheRepository<CronJobConfiguration> {{
+
+    public CronJobConfiguration findByJobName(String jobName) {{
+        return find("jobName", jobName).firstResult();
+    }}
+
+    public List<CronJobConfiguration> listAllJobs() {{
+        return listAll();
+    }}
+}}
+"""
+
+
+def gen_cron_job_handlers(pkg, sn):
+    short = to_short(sn)
+    return f"""\
+package {pkg}.scheduler;
+
+import org.jboss.logging.Logger;
+
+import jakarta.enterprise.context.ApplicationScoped;
+
+/**
+ * Contiene i metodi handler dei job schedulati dinamici.
+ * Registrare qui ogni handler e mapparlo in ScheduledJob.init().
+ * Il nome del job (es. "cron.{short}.sample") deve corrispondere
+ * alla colonna job_name nella tabella cron_jobs_configuration.
+ */
+@ApplicationScoped
+public class CronJobHandlers {{
+
+    private static final Logger LOG = Logger.getLogger(CronJobHandlers.class);
+
+    public void sampleJob() {{
+        LOG.infof("Esecuzione job schedulato: cron.{short}.sample");
+        // TODO: implementare la logica del job
+    }}
+}}
+"""
+
+
+def gen_abstract_resource(pkg):
+    return f"""\
+package {pkg}.resource;
+
+import {pkg}.utils.RequestCtx;
+import jakarta.ws.rs.container.ContainerRequestContext;
+
+/**
+ * Base resource per eliminare duplicazioni Sonar: record ReqContext
+ * e metodo init() per inizializzare il contesto dalla request.
+ */
+public abstract class AbstractResource {{
+
+    protected record ReqContext(
+            long start,
+            String path,
+            String kl,
+            String tid,
+            boolean modAsync,
+            String processType
+    ) {{}}
+
+    protected ReqContext init(ContainerRequestContext ctx, String path) {{
+        return new ReqContext(
+                System.nanoTime(),
+                path,
+                RequestCtx.kl(ctx),
+                RequestCtx.tid(ctx),
+                RequestCtx.modAsync(ctx),
+                RequestCtx.processType(ctx)
+        );
+    }}
+}}
+"""
+
+
 def gen_scheduled_job(pkg, sn):
     short = to_short(sn)
     return f"""\
@@ -3387,36 +3624,128 @@ package {pkg}.scheduler;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.jboss.logging.Logger;
 
 import io.quarkus.scheduler.Scheduled;
+import io.quarkus.scheduler.Scheduler;
+import {pkg}.domain.CronJobConfiguration;
+import {pkg}.repository.CronJobConfigurationRepository;
+import jakarta.annotation.PostConstruct;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import net.javacrumbs.shedlock.core.LockConfiguration;
 import net.javacrumbs.shedlock.core.LockProvider;
 
+/**
+ * Gestore dinamico dei cron job: legge le espressioni cron dalla tabella
+ * cron_jobs_configuration e le applica a runtime senza restart.
+ * Ogni 30s verifica se le espressioni sono cambiate in DB.
+ */
 @ApplicationScoped
 public class ScheduledJob {{
 
     private static final Logger LOG = Logger.getLogger(ScheduledJob.class);
 
-    @Inject
-    LockProvider lockProvider;
+    // Cache: job_name -> cron_expression corrente
+    private final Map<String, String> currentCronByJob = new ConcurrentHashMap<>();
 
-    @Scheduled(cron = "${{cron.clean.sample}}")
-    void cleanSample() {{
+    // Registry: job_name -> runnable handler
+    private final Map<String, Runnable> handlers = new ConcurrentHashMap<>();
+
+    @Inject Scheduler scheduler;
+    @Inject CronJobConfigurationRepository repo;
+    @Inject LockProvider lockProvider;
+    @Inject CronJobHandlers jobHandlers;
+
+    @PostConstruct
+    void init() {{
+        // Registrare qui tutti gli handler supportati dal microservizio.
+        // Il job_name DEVE corrispondere al valore nella tabella cron_jobs_configuration.
+        handlers.put("cron.{short}.sample", jobHandlers::sampleJob);
+
+        // Schedula subito all'avvio in base al DB
+        refreshFromDbAndApply(true);
+    }}
+
+    /** Watcher: ogni 30s controlla la tabella e applica eventuali cambi cron senza restart. */
+    @Scheduled(every = "30s")
+    void refreshTick() {{
+        refreshFromDbAndApply(false);
+    }}
+
+    private void refreshFromDbAndApply(boolean firstLoad) {{
+        var rows = repo.listAllJobs();
+        Set<String> dbJobs = ConcurrentHashMap.newKeySet();
+
+        for (CronJobConfiguration cfg : rows) {{
+            String jobName = cfg.getJobName();
+            String cron    = cfg.getCronExpression();
+            dbJobs.add(jobName);
+
+            Runnable handler = handlers.get(jobName);
+            if (handler == null) {{
+                LOG.warnf("Job in DB non gestito da questo MS: job_name=%s -> SKIP", jobName);
+                continue;
+            }}
+            applySingleJob(jobName, cron, handler, firstLoad);
+        }}
+
+        // Rimuove job non più presenti in DB
+        for (String cachedJob : currentCronByJob.keySet()) {{
+            if (!dbJobs.contains(cachedJob)) {{
+                LOG.infof("Job rimosso da DB: %s -> unschedule", cachedJob);
+                scheduler.unscheduleJob(identityOf(cachedJob));
+                currentCronByJob.remove(cachedJob);
+            }}
+        }}
+    }}
+
+    private void applySingleJob(String jobName, String cron, Runnable handler, boolean firstLoad) {{
+        String old = currentCronByJob.get(jobName);
+
+        // Supporto disabilitazione runtime via DB (cron = off/disabled)
+        if (cron == null || cron.isBlank()
+                || "off".equalsIgnoreCase(cron)
+                || "disabled".equalsIgnoreCase(cron)) {{
+            if (firstLoad || old != null) {{
+                scheduler.unscheduleJob(identityOf(jobName));
+                currentCronByJob.remove(jobName);
+                LOG.infof("Job disabilitato: %s cron=%s -> unscheduled", jobName, cron);
+            }}
+            return;
+        }}
+
+        if (!firstLoad && cron.equals(old)) {{
+            return;
+        }}
+
+        String identity = identityOf(jobName);
+        scheduler.unscheduleJob(identity);
+        scheduler.newJob(identity)
+                .setCron(cron)
+                .setTask(ctx -> runWithLock(jobName, handler))
+                .schedule();
+
+        currentCronByJob.put(jobName, cron);
+        LOG.infof("Job schedulato/aggiornato: %s identity=%s cron=%s (old=%s)", jobName, identity, cron, old);
+    }}
+
+    private void runWithLock(String jobName, Runnable handler) {{
+        String lockName = "LOCK_" + jobName;
         LockConfiguration lock = new LockConfiguration(
-                Instant.now(), "CLEAN_{short.upper()}",
-                Duration.ofMinutes(30), Duration.ofMinutes(10));
+                Instant.now(), lockName,
+                Duration.ofMinutes(20), Duration.ofMinutes(5));
         lockProvider.lock(lock).ifPresent(l -> {{
-            try {{ executeClean(); }} finally {{ l.unlock(); }}
+            try {{ handler.run(); }} finally {{ l.unlock(); }}
         }});
     }}
 
-    private void executeClean() {{
-        LOG.info("Esecuzione job schedulato per pulizia dati {sn}");
-        // TODO: implementare la logica di pulizia
+    private static String identityOf(String jobName) {{
+        return "dyn-" + jobName.replace('.', '-');
     }}
 }}
 """
@@ -3500,13 +3829,19 @@ CREATE TABLE [dbo].[shedlock](
     [locked_by]  [varchar](250) NOT NULL,
     CONSTRAINT [PK_shedlock] PRIMARY KEY CLUSTERED ([name] ASC)
 );
+
+CREATE TABLE [dbo].[cron_jobs_configuration](
+    [id]              [bigint] IDENTITY(1,1) NOT NULL,
+    [job_name]        [varchar](100) NOT NULL,
+    [cron_expression] [varchar](50) NOT NULL,
+    CONSTRAINT [PK_cron_jobs_configuration] PRIMARY KEY CLUSTERED ([id] ASC),
+    CONSTRAINT [uk_cron_jobs_configuration] UNIQUE NONCLUSTERED ([job_name] ASC)
+);
 """
 
 
 def gen_sample_resource_test_dg(pkg, sn):
     cls = to_class_prefix(sn)
-    short = to_short(sn)
-    path_prefix = short[:12] if len(short) > 12 else short
     return f"""\
 package {pkg}.test.resource;
 
@@ -3517,37 +3852,24 @@ import org.junit.jupiter.api.Test;
 import {pkg}.test.NoSecurityTestProfile;
 import static org.hamcrest.Matchers.*;
 
+/**
+ * Test di integrazione Quarkus — verifica che l'applicazione si avvii
+ * e che l'endpoint /health risponda correttamente.
+ *
+ * I test REST sulle risorse di business ({cls}Resource) vanno scritti
+ * usando @InjectMock per mockare il datasource/repository, oppure con
+ * un DB H2 in-memory configurato nel profilo di test.
+ */
 @QuarkusTest
 @TestProfile(NoSecurityTestProfile.class)
 class {cls}ResourceTest {{
 
     @Test
-    void testGetAll_shouldReturn200Or204() {{
+    void applicationStarts_healthEndpointShouldReturn200() {{
         RestAssured.given()
-            .header("keyLogic", "test-kl")
-            .header("transactionId", "test-tid")
-            .header("processType", "TEST")
-            .when().get("/{path_prefix}")
-            .then().statusCode(anyOf(is(200), is(204)));
-    }}
-
-    @Test
-    void testGetById_invalidId_shouldReturn400() {{
-        RestAssured.given()
-            .header("keyLogic", "test-kl")
-            .header("transactionId", "test-tid")
-            .when().get("/{path_prefix}/0")
-            .then().statusCode(400);
-    }}
-
-    @Test
-    void testSave_nullBody_shouldReturn400() {{
-        RestAssured.given()
-            .header("keyLogic", "test-kl")
-            .header("transactionId", "test-tid")
-            .contentType("application/json")
-            .when().post("/{path_prefix}/save")
-            .then().statusCode(anyOf(is(400), is(415)));
+            .when().get("/q/health")
+            .then().statusCode(200)
+            .body("status", equalTo("UP"));
     }}
 }}
 """
@@ -3578,6 +3900,15 @@ def gen_lib_pom(lib_name, lib_group, lib_pkg):
         <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
         <quarkus.platform.version>3.9.2</quarkus.platform.version>
         <compiler-plugin.version>3.13.0</compiler-plugin.version>
+        <surefire.version>3.2.5</surefire.version>
+        <jacoco.version>0.8.14</jacoco.version>
+        <mockito.version>5.14.2</mockito.version>
+        <assertj.version>3.26.3</assertj.version>
+        <junit.version>5.10.3</junit.version>
+        <lombok.version>1.18.30</lombok.version>
+        <sonar.coverage.jacoco.xmlReportPaths>target/site/jacoco/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
+        <sonar.java.coveragePlugin>jacoco</sonar.java.coveragePlugin>
+        <argLine></argLine>
     </properties>
 
     <dependencyManagement>
@@ -3592,12 +3923,29 @@ def gen_lib_pom(lib_name, lib_group, lib_pkg):
     </dependencyManagement>
 
     <dependencies>
+        <!-- Quarkus API (provided) -->
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-rest</artifactId><scope>provided</scope></dependency>
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-rest-client-jackson</artifactId><scope>provided</scope></dependency>
-        <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-oidc</artifactId><scope>provided</scope></dependency>
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-redis-client</artifactId><scope>provided</scope></dependency>
-        <dependency><groupId>org.apache.httpcomponents</groupId><artifactId>httpclient</artifactId><version>4.5.14</version></dependency>
+
+        <!-- JWT -->
+        <dependency><groupId>com.auth0</groupId><artifactId>java-jwt</artifactId><version>4.4.0</version></dependency>
+
+        <!-- Jackson -->
         <dependency><groupId>com.fasterxml.jackson.core</groupId><artifactId>jackson-databind</artifactId></dependency>
+        <dependency><groupId>com.fasterxml.jackson.datatype</groupId><artifactId>jackson-datatype-jsr310</artifactId></dependency>
+
+        <!-- DB pool -->
+        <dependency><groupId>com.zaxxer</groupId><artifactId>HikariCP</artifactId><version>7.0.2</version></dependency>
+
+        <!-- Lombok -->
+        <dependency><groupId>org.projectlombok</groupId><artifactId>lombok</artifactId><version>${{lombok.version}}</version><scope>provided</scope></dependency>
+
+        <!-- Test -->
+        <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><version>${{junit.version}}</version><scope>test</scope></dependency>
+        <dependency><groupId>org.mockito</groupId><artifactId>mockito-core</artifactId><version>${{mockito.version}}</version><scope>test</scope></dependency>
+        <dependency><groupId>org.mockito</groupId><artifactId>mockito-junit-jupiter</artifactId><version>${{mockito.version}}</version><scope>test</scope></dependency>
+        <dependency><groupId>org.assertj</groupId><artifactId>assertj-core</artifactId><version>${{assertj.version}}</version><scope>test</scope></dependency>
     </dependencies>
 
     <build>
@@ -3607,8 +3955,50 @@ def gen_lib_pom(lib_name, lib_group, lib_pkg):
                 <version>${{compiler-plugin.version}}</version>
                 <configuration><release>${{java.version}}</release></configuration>
             </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>${{surefire.version}}</version>
+                <configuration>
+                    <includes><include>**/*Test.java</include></includes>
+                    <systemPropertyVariables>
+                        <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
+                    </systemPropertyVariables>
+                    <argLine>@{{argLine}} -javaagent:${{settings.localRepository}}/org/mockito/mockito-core/${{mockito.version}}/mockito-core-${{mockito.version}}.jar</argLine>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${{jacoco.version}}</version>
+                <executions>
+                    <execution><id>prepare-agent</id><goals><goal>prepare-agent</goal></goals></execution>
+                    <execution><id>report</id><phase>verify</phase><goals><goal>report</goal></goals></execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>io.smallrye</groupId>
+                <artifactId>jandex-maven-plugin</artifactId>
+                <version>3.1.6</version>
+                <executions>
+                    <execution><id>make-index</id><goals><goal>jandex</goal></goals></execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
+
+    <distributionManagement>
+        <repository>
+            <id>snam-nexus</id>
+            <name>MyCo Internal Repository</name>
+            <url>https://nexus.snam.it/repository/ptg2767-maven-releases</url>
+        </repository>
+        <snapshotRepository>
+            <id>snam-nexus</id>
+            <name>MyCo Internal Repository</name>
+            <url>https://nexus.snam.it/repository/ptg2767-maven-snapshots</url>
+        </snapshotRepository>
+    </distributionManagement>
 </project>
 """
 
@@ -3623,17 +4013,6 @@ authorization-client/mp-rest/connectTimeout=2000
 authorization-client/mp-rest/readTimeout=3000
 
 ############################################
-# ADFS TOKEN (CLIENT CREDENTIALS M2M)
-############################################
-adsf.token.url=${ADSF_TOKEN_URL:https://your-adfs/token}
-adsf.client.id=${ADSF_CLIENT_ID:your-client-id}
-adsf.client.secret=${ADSF_CLIENT_SECRET:your-secret}
-# Resource audience ADFS (App ID URI del backend target)
-adsf.resource.prefix=${ADSF_RESOURCE_PREFIX:your-prefix}
-# Scope default
-adsf.scope.default=${ADSF_SCOPE:default}
-
-############################################
 # REDIS (cache distribuita)
 ############################################
 quarkus.redis.hosts=${REDIS_HOSTS:redis://localhost:6379}
@@ -3642,8 +4021,6 @@ quarkus.redis.hosts=${REDIS_HOSTS:redis://localhost:6379}
 # APP CACHE (Redis - custom)
 ############################################
 app.cache.redis.prefix=${CACHE_REDIS_PREFIX:cache}
-# TTL cache getWithBody di AdsfRestClientService (secondi)
-cache.adsf-rest-client.get-with-body.ttl-seconds=${CACHE_ADSF_GET_WITH_BODY_TTL:300}
 
 ############################################
 # B2B TOKEN (HMAC-SHA256)
@@ -3716,6 +4093,61 @@ import java.lang.annotation.*;
 @Target({{ElementType.METHOD, ElementType.TYPE}})
 @Retention(RetentionPolicy.RUNTIME)
 public @interface LogPmr {{}}
+"""
+
+
+def gen_lib_user_type(lib_pkg):
+    return f"""\
+package {lib_pkg}.enums;
+
+/**
+ * Tipo utente per la gestione delle autorizzazioni.
+ * INTERNAL = utente interno (dipendente / applicativo interno)
+ * EXTERNAL = utente esterno (partner, cliente, ecc.)
+ */
+public enum UserType {{
+    INTERNAL,
+    EXTERNAL
+}}
+"""
+
+
+def gen_lib_authz_annotation_cache(lib_pkg):
+    return f"""\
+package {lib_pkg}.cache;
+
+import {lib_pkg}.annotation.AuthzRead;
+import jakarta.ws.rs.container.ResourceInfo;
+import java.lang.reflect.Method;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+
+/**
+ * Cache delle annotazioni @AuthzRead per evitare reflection ripetuta
+ * ad ogni richiesta HTTP (prestazioni + riduzione GC pressure).
+ */
+public final class AuthzAnnotationCache {{
+
+    private static final ConcurrentMap<Method, AuthzRead> CACHE = new ConcurrentHashMap<>();
+
+    private AuthzAnnotationCache() {{}}
+
+    /**
+     * Restituisce l'annotazione @AuthzRead del metodo/classe corrente,
+     * cercando prima sul metodo e poi sulla classe dichiarante.
+     * Il risultato è memoizzato per la vita dell'applicazione.
+     */
+    public static AuthzRead getAuthzRead(ResourceInfo resourceInfo) {{
+        Method method = resourceInfo.getResourceMethod();
+        return CACHE.computeIfAbsent(method, m -> {{
+            AuthzRead ann = m.getAnnotation(AuthzRead.class);
+            if (ann == null) {{
+                ann = m.getDeclaringClass().getAnnotation(AuthzRead.class);
+            }}
+            return ann;
+        }});
+    }}
+}}
 """
 
 
@@ -5160,6 +5592,8 @@ def scaffold_library(lib_name: str, lib_pkg: str, output_dir: str) -> None:
     write(java / "annotation"   / "AuthzRead.java",         gen_lib_authz_read(lib_pkg))
     write(java / "annotation"   / "AuthzWrite.java",        gen_lib_authz_write(lib_pkg))
     write(java / "annotation"   / "LogPmr.java",            gen_lib_log_pmr(lib_pkg))
+    write(java / "enums"        / "UserType.java",          gen_lib_user_type(lib_pkg))
+    write(java / "cache"        / "AuthzAnnotationCache.java", gen_lib_authz_annotation_cache(lib_pkg))
     write(java / "request"      / "AuthzRequest.java",      gen_lib_authz_request(lib_pkg))
     write(java / "response"     / "AuthzResponse.java",     gen_lib_authz_response(lib_pkg))
     write(java / "client"       / "AuthorizationClient.java",gen_lib_authorization_client(lib_pkg))
@@ -5167,17 +5601,10 @@ def scaffold_library(lib_name: str, lib_pkg: str, output_dir: str) -> None:
     write(java / "filter"       / "AuthzReadFilter.java",   gen_lib_authz_read_filter(lib_pkg))
     write(java / "filter"       / "AuthzWriteFilter.java",  gen_lib_authz_write_filter(lib_pkg))
     write(java / "filter"       / "B2BTokenFilter.java",    gen_lib_b2b_token_filter(lib_pkg))
-    write(java / "factory"      / "AdsfM2MHeadersFactory.java", gen_lib_adsf_m2m_headers_factory(lib_pkg))
     write(java / "util"         / "AuthorizationUtils.java", gen_lib_authorization_utils(lib_pkg))
     write(java / "util"         / "B2BTokenUtils.java",     gen_lib_b2b_token_utils(lib_pkg))
     write(java / "util"         / "CacheUtils.java",        gen_lib_cache_utils(lib_pkg))
     write(java / "util"         / "JsonUtils.java",         gen_json_utils(f"{lib_pkg}.util"))
-    write(java / "client"       / "DataPlatformClient.java",gen_lib_data_platform_client(lib_pkg))
-    write(java / "config"       / "CustomHttpClient.java",  gen_lib_custom_http_client(lib_pkg))
-    write(java / "cache"        / "AdsfTokenCache.java",    gen_lib_adsf_token_cache(lib_pkg))
-    write(java / "dto"          / "AdsfTokenDto.java",      gen_lib_adsf_token_dto(lib_pkg))
-    write(java / "service"      / "AdsfTokenService.java",  gen_lib_adsf_token_service(lib_pkg))
-    write(java / "service"      / "AdsfRestClientService.java", gen_lib_adsf_rest_client_service(lib_pkg))
     write(java / "interceptor"  / "LogPmrInterceptor.java", gen_lib_log_pmr_interceptor(lib_pkg))
     write(java / "resolver"     / "MinimalContextResolver.java", gen_lib_minimal_context_resolver(lib_pkg))
     write(java / "resolver"     / "JwtUserIdResolver.java", gen_lib_jwt_user_id_resolver(lib_pkg))
@@ -5194,8 +5621,7 @@ def scaffold_service_dg(sn: str, pkg: str, output_dir: str,
     java      = root / "src" / "main" / "java" / pkg_to_path(pkg)
     res       = root / "src" / "main" / "resources"
     test_res  = root / "src" / "test" / "resources"
-
-    print(f"\n⚙️   Scaffolding microservizio DataGateway '{sn}'")
+    test_java = root / "src" / "test" / "java" / pkg_to_path(pkg)
     print(f"    package:  {pkg}")
     print(f"    libreria: {lib_group}:{lib_artifact}")
     print(f"📁  Output: {root}\n")
@@ -5231,13 +5657,21 @@ def scaffold_service_dg(sn: str, pkg: str, output_dir: str,
 
     write(java / "domain"    / f"{to_class_prefix(sn)}Entity.java", gen_domain_entity(pkg, sn))
     write(java / "domain"    / "RevisionInfo.java",               gen_revision_info(pkg))
+    write(java / "domain"    / "CronJobConfiguration.java",       gen_cron_job_configuration(pkg))
     write(java / "repository"/ f"{to_class_prefix(sn)}Repository.java", gen_repository(pkg, sn))
+    write(java / "repository"/ "CronJobConfigurationRepository.java",    gen_cron_job_configuration_repository(pkg))
     write(java / "mapper"    / f"{to_class_prefix(sn)}Mapper.java",     gen_mapper(pkg, sn))
     write(java / "dto"       / f"{to_class_prefix(sn)}DTO.java",        gen_sample_dto_dg(pkg, sn))
+    write(java / "resource"  / "AbstractResource.java",                  gen_abstract_resource(pkg))
     write(java / "resource"  / f"{to_class_prefix(sn)}Resource.java",   gen_sample_resource_dg(pkg, sn, lib_pkg))
 
+    write(java / "scheduler" / "CronJobHandlers.java",            gen_cron_job_handlers(pkg, sn))
     write(java / "scheduler" / "ScheduledJob.java",               gen_scheduled_job(pkg, sn))
     write(java / "scheduler" / "ShedLockConfig.java",             gen_shedlock_config(pkg))
+
+    write(test_java / "test" / "NoSecurityTestProfile.java",         gen_no_security_test_profile(pkg))
+    write(test_java / "test" / "utils" / "UtilityInstanceTest.java", gen_utility_instance_test_dg(pkg))
+    write(test_res / "mockito-extensions" / "org.mockito.plugins.MockMaker", gen_mockito_extensions_file())
 
     write(root / "info.yaml",                                      gen_info_yaml(sn, pkg, "datagateway", lib_group, lib_artifact))
     write(root / "README.md",                                      gen_readme(sn, pkg, "datagateway", lib_group, lib_artifact))
@@ -5298,8 +5732,7 @@ def scaffold_service(sn: str, pkg: str, output_dir: str,
 
     test_java = root / "src" / "test" / "java" / pkg_to_path(pkg)
     write(test_java / "test" / "NoSecurityTestProfile.java",         gen_no_security_test_profile(pkg))
-    write(test_java / "test" / "resource" / "SampleResourceTest.java", gen_sample_resource_test(pkg, sn))
-    write(test_java / "test" / "utils" / "UtilityInstanceTest.java",   gen_utility_instance_test(pkg))
+    write(test_java / "test" / "utils" / "UtilityInstanceTest.java", gen_utility_instance_test(pkg))
     write(test_res / "mockito-extensions" / "org.mockito.plugins.MockMaker", gen_mockito_extensions_file())
 
     write(root / "info.yaml",                                   gen_info_yaml(sn, pkg, "frontiera", lib_group, lib_artifact))
