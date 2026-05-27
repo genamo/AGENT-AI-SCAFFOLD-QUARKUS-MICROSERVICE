@@ -86,7 +86,7 @@ def gen_pom(sn, pkg, lib_group, lib_artifact):
         <maven-surefire-plugin.version>3.2.5</maven-surefire-plugin.version>
         <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
         <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
-        <quarkus.platform.version>3.9.2</quarkus.platform.version>
+        <quarkus.platform.version>3.34.5</quarkus.platform.version>
         <mapstruct.version>1.6.3</mapstruct.version>
         <sonar.sources>
             src/main/java/{pkg_to_path(pkg)}/resource,src/main/java/{pkg_to_path(pkg)}/service,src/main/java/{pkg_to_path(pkg)}/utils
@@ -96,7 +96,6 @@ def gen_pom(sn, pkg, lib_group, lib_artifact):
         <sonar.dynamicAnalysis>reuseReports</sonar.dynamicAnalysis>
         <sonar.language>java</sonar.language>
         <sonar.coverage.jacoco.xmlReportPaths>target/site/jacoco/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
-        <quarkus.package.type>jar</quarkus.package.type>
         <argLine/>
     </properties>
 
@@ -127,7 +126,6 @@ def gen_pom(sn, pkg, lib_group, lib_artifact):
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-hibernate-validator</artifactId></dependency>
         <!-- KAFKA -->
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-messaging-kafka</artifactId></dependency>
-        <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-smallrye-reactive-messaging-kafka</artifactId></dependency>
         <!-- REDIS -->
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-redis-client</artifactId></dependency>
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-cache</artifactId></dependency>
@@ -151,7 +149,7 @@ def gen_pom(sn, pkg, lib_group, lib_artifact):
         <!-- FAULT TOLERANCE -->
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-smallrye-fault-tolerance</artifactId></dependency>
         <!-- TEST -->
-        <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-junit5-mockito</artifactId><scope>test</scope></dependency>
+        <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-junit-mockito</artifactId><scope>test</scope></dependency>
         <dependency><groupId>io.rest-assured</groupId><artifactId>rest-assured</artifactId><scope>test</scope></dependency>
     </dependencies>
 
@@ -160,12 +158,14 @@ def gen_pom(sn, pkg, lib_group, lib_artifact):
             <plugin>
                 <groupId>io.quarkus</groupId><artifactId>quarkus-maven-plugin</artifactId>
                 <version>${{quarkus.platform.version}}</version>
+                <extensions>true</extensions>
                 <executions><execution><goals><goal>build</goal></goals></execution></executions>
             </plugin>
             <plugin>
                 <artifactId>maven-compiler-plugin</artifactId><version>${{compiler-plugin.version}}</version>
                 <configuration>
-                    <release>${{java.version}}</release>
+                    <source>${{java.version}}</source>
+                    <target>${{java.version}}</target>
                     <annotationProcessorPaths>
                         <path><groupId>org.mapstruct</groupId><artifactId>mapstruct-processor</artifactId><version>${{mapstruct.version}}</version></path>
                         <path><groupId>org.projectlombok</groupId><artifactId>lombok</artifactId><version>${{lombok.version}}</version></path>
@@ -191,23 +191,23 @@ def gen_pom(sn, pkg, lib_group, lib_artifact):
 </project>
 """
 
-
-def gen_application_properties(sn, pkg, lib_pkg):
-    short     = to_short(sn)
+def gen_application_properties(sn, pkg, lib_pkg, short=None):
+    if short is None:
+        short = to_short(sn)
     client_key = f"{sn}-dg-client"
     return f"""\
 ############################################
 # QUARKUS CORE
 ############################################
 quarkus.application.name={sn}
-quarkus.http.root-path=${{kapp:prefix}}
+mp.env=${{KAPP:2767-d}}
+quarkus.http.root-path=/${{mp.env}}
 quarkus.http.port=${{QUARKUS_PORT:8090}}
 quarkus.package.output-name={sn}
 
 ############################################
 # LOGGING - GLOBAL
 ############################################
-quarkus.log.console.enable=true
 quarkus.log.level=${{LOG_LEVEL_ROOT_CONSOLE:INFO}}
 quarkus.log.category."io.quarkus.confluent".level=ERROR
 quarkus.log.console.format=[%5p] %d{{yyyy-MM-dd HH:mm:ss.SSS}} API:%X{{API}} TRANS-ID:%X{{TN}} KEY-LOGIC:%X{{KL}} MESSAGE-KEY:%X{{MK}} PROCESS-TYPE:%X{{PT}} [%t] %c{{1}} - %s%e%n
@@ -223,75 +223,103 @@ quarkus.log.category."{lib_pkg}.interceptor".level=INFO
 ############################################
 # REDIS
 ############################################
-quarkus.redis.hosts=${{REDIS_HOSTS:redis://localhost:6379}}
-
+quarkus.redis.hosts=${{REDIS_SSL:redis://}}${{REDIS_HOSTS:localhost}}:${{REDIS_PORT:6379}}
+quarkus.redis.password=${{REDIS_PASSWORD}}
 ############################################
-# APP CACHE
+# APP CACHE (Redis - custom)
 ############################################
 app.cache.redis.enabled=true
 app.cache.redis.prefix=cache
-cache.{short}.sample.ttl-seconds=${{CACHE_{short.upper()}_SAMPLE_TTL:300}}
+
+cache.monitoring-flussi.last-executions.ttl-seconds=${{CACHE_MF_LAST_EXEC_TTL:300}}
 
 ############################################
 # KAFKA
 ############################################
 kafka.bootstrap.servers=${{KAFKA_BOOTSTRAP_SERVERS:localhost:${{KAFKA_SERVER_PORT:9092}}}}
-kafka-prefix.topics=${{KAFKA_TOPIC_PREFIX:prefix}}
-kafka.security.protocol=SASL_SSL
-kafka.sasl.mechanism=PLAIN
-kafka.sasl.jaas.username=${{KAFKA_API_KEY:XXXXXXXXXX}}
-kafka.sasl.jaas.password=${{KAFKA_API_SECRET:YYYYYYYYYY}}
-kafka.sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="${{kafka.sasl.jaas.username}}" password="${{kafka.sasl.jaas.password}}";
+kafka-prefix.topics=${{KAFKA_TOPIC_PREFIX:2767-d}}
+
+
+# Timeouts / stabilità rete
 kafka.request.timeout.ms=30000
 kafka.connections.max.idle.ms=540000
 kafka.reconnect.backoff.ms=1000
 kafka.reconnect.backoff.max.ms=10000
 kafka.socket.keepalive.enable=true
 
+# LIMITI BUFFER (prevenzione OOM lato client)
+kafka.receive.buffer.bytes=65536
+kafka.send.buffer.bytes=131072
+
 ############################################
-# KAFKA PRODUCER
+# KAFKA PRODUCER GENERICO
 ############################################
 mp.messaging.outgoing.kafka-out.connector=smallrye-kafka
 mp.messaging.outgoing.kafka-out.bootstrap.servers=${{kafka.bootstrap.servers}}
 mp.messaging.outgoing.kafka-out.key.serializer=org.apache.kafka.common.serialization.StringSerializer
-mp.messaging.outgoing.kafka-out.value.serializer=org.apache.kafka.common.serialization.StringSerializer
+mp.messaging.outgoing.kafka-out.value.serializer=org.apache.kafka.common.serialization.ByteArraySerializer
 mp.messaging.outgoing.kafka-out.acks=all
 mp.messaging.outgoing.kafka-out.retries=3
 
+mp.messaging.outgoing.kafka-out.security.protocol=SASL_SSL
+mp.messaging.outgoing.kafka-out.sasl.mechanism=PLAIN
+mp.messaging.outgoing.kafka-out.sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="${{KAFKA_API_KEY}}" password="${{KAFKA_API_SECRET}}";
+# LIMITI PRODUCER MEMORY
+mp.messaging.outgoing.kafka-out.batch.size=16384
+mp.messaging.outgoing.kafka-out.linger.ms=5
+mp.messaging.outgoing.kafka-out.buffer.memory=8388608
+
 ############################################
-# KAFKA CONSUMER (DA CONFIGURARE)
+# GENERIC KAFKA CONSUMER (STRING)
 ############################################
-#mp.messaging.incoming.kafka-in.connector=smallrye-kafka
-#mp.messaging.incoming.kafka-in.bootstrap.servers=${{kafka.bootstrap.servers}}
-#mp.messaging.incoming.kafka-in.group.id=groupId-{sn}
-#mp.messaging.incoming.kafka-in.auto.offset.reset=earliest
-#mp.messaging.incoming.kafka-in.value.deserializer=org.apache.kafka.common.serialization.StringDeserializer
-#mp.messaging.incoming.kafka-in.enable.auto.commit=false
-#mp.messaging.incoming.kafka-in.max.poll.records=1
-#mp.messaging.incoming.kafka-in.topic=${{kafka-prefix.topics}}-pmr-{short}
+mp.messaging.incoming.anagrafica-flussi-in.connector=smallrye-kafka
+mp.messaging.incoming.anagrafica-flussi-in.bootstrap.servers=${{kafka.bootstrap.servers}}
+mp.messaging.incoming.anagrafica-flussi-in.group.id=groupId-{sn}
+
+# Offset behavior
+mp.messaging.incoming.anagrafica-flussi-in.auto.offset.reset=latest
+
+# SERIALIZER CORRETTO (fondamentale)
+mp.messaging.incoming.anagrafica-flussi-in.value.deserializer=org.apache.kafka.common.serialization.ByteArrayDeserializer
+mp.messaging.incoming.anagrafica-flussi-in.key.deserializer=org.apache.kafka.common.serialization.StringDeserializer
+
+#  Commit manuale
+mp.messaging.incoming.anagrafica-flussi-in.enable.auto.commit=false
+
+#  Performance / stabilità
+mp.messaging.incoming.anagrafica-flussi-in.max.poll.records=1
+mp.messaging.incoming.anagrafica-flussi-in.fetch.max.bytes=262144
+mp.messaging.incoming.anagrafica-flussi-in.max.partition.fetch.bytes=262144
+mp.messaging.incoming.anagrafica-flussi-in.session.timeout.ms=15000
+mp.messaging.incoming.anagrafica-flussi-in.max.poll.interval.ms=300000
+
+#  Backpressure (importantissimo con byte[])
+mp.messaging.incoming.anagrafica-flussi-in.max-queue-size-factor=1
+mp.messaging.incoming.anagrafica-flussi-in.max-inflight-messages=1
+
+# Topic
+mp.messaging.incoming.anagrafica-flussi-in.topic=${{kafka-prefix.topics}}-{short}
+
+#  SECURITY
+mp.messaging.incoming.anagrafica-flussi-in.security.protocol=SASL_SSL
+mp.messaging.incoming.anagrafica-flussi-in.sasl.mechanism=PLAIN
+mp.messaging.incoming.anagrafica-flussi-in.sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="${{KAFKA_API_KEY}}" password="${{KAFKA_API_SECRET}}";
+
 
 ############################################
 # SECURITY - HTTP policy
 ############################################
-# Tutte le path pubbliche: la security applicativa è gestita da AuthzReadFilter/AuthzWriteFilter.
+# Tutte le path sono "pubbliche" a livello HTTP.
+# La security applicativa è gestita da AuthzReadFilter/AuthzWriteFilter.
 quarkus.http.auth.permission.public.paths=/*
 quarkus.http.auth.permission.public.policy=permit
-
+security.enabled=${{SECURITY_ENABLED}}
+security.authz.bypass=${{SECURITY_AUTHZ_BYPASS}}
 ############################################
 # SECURITY - OIDC
 ############################################
-# OIDC disabilitato: la validazione JWT è delegata all'authorization service esterno.
+# Il token viene validato dall'authorization service esterno.
 quarkus.oidc.enabled=false
-quarkus.oidc.auth-server-url=${{OIDC_AUTH_SERVER_URL:https://sso.example.com/auth/realms/PMR}}
-quarkus.oidc.client-id=${{OIDC_CLIENT_ID:quarkus-client}}
-quarkus.oidc.credentials.secret=${{OIDC_SECRET:mysecret}}
-
-############################################
-# AUTHORIZATION (common library)
-############################################
-authorization-client/mp-rest/url=${{AUTHZ_URL:http://localhost:8090/authorization}}
-authorization-client/mp-rest/connectTimeout=2000
-authorization-client/mp-rest/readTimeout=3000
 
 ############################################
 # OBSERVABILITY
@@ -306,33 +334,41 @@ quarkus.swagger-ui.always-include=true
 quarkus.swagger-ui.path=/swagger
 quarkus.smallrye-openapi.path=/openapi
 mp.openapi.filter={pkg}.filter.GlobalHeadersOpenApiFilter
-
 ############################################
-# CLIENT REST
+# CLIENT REST verso DataGateway
 ############################################
-{client_key}/mp-rest/url=${{SERVICE_DG_URL:http://localhost:8091}}
+{client_key}/mp-rest/url=${{BATCH_INTEGRAZIONE_DG_URL:http://localhost:8091}}
 {client_key}/mp-rest/connectTimeout=10000
 {client_key}/mp-rest/readTimeout=30000
 
-############################################
-# PMR COMMON LIBRARY - CDI INDEX
-############################################
+authorization-client/mp-rest/url=${{AUTHORIZATION_SERVICE_URL:http://localhost:8480/${{mp.env}}}}
+authorization-client/mp-rest/connectTimeout=5000
+authorization-client/mp-rest/readTimeout=10000
+
+
 quarkus.index-dependency.pmr-common.group-id=it.eng.snam.pmr
 quarkus.index-dependency.pmr-common.artifact-id=pmr-common-library
+
 
 ############################################
 # DEV PROFILE
 ############################################
+
 %dev.quarkus.oidc.enabled=false
 %dev.security.enabled=true
 %dev.security.authz.bypass=true
 %dev.kafka.bootstrap.servers=localhost:${{KAFKA_SERVER_PORT:9092}}
 %dev.kafka.security.protocol=PLAINTEXT
 %dev.kafka.topics.auto-create=true
+%dev.mp.messaging.outgoing.kafka-out.security.protocol=PLAINTEXT
+%dev.mp.messaging.incoming.anagrafica-flussi-in.security.protocol=PLAINTEXT
+
+%dev.quarkus.redis.hosts=redis://localhost:6379
+%dev.quarkus.devservices.enabled=false
 """
 
-
 def gen_application_test_properties_svc(sn):
+    short = to_short(sn)
     return f"""\
 quarkus.oidc.enabled=false
 quarkus.http.auth.permission.public.paths=/*
@@ -342,11 +378,14 @@ quarkus.kafka.devservices.enabled=false
 quarkus.apicurio-registry.devservices.enabled=false
 kafka.bootstrap.servers=localhost:9092
 kafka.security.protocol=PLAINTEXT
+kafka-prefix.topics=test
+mp.messaging.incoming.anagrafica-flussi-in.connector=smallrye-in-memory
+mp.messaging.incoming.anagrafica-flussi-in.merge=true
+quarkus.redis.devservices.enabled=false
 quarkus.redis.hosts=redis://localhost:6379
 quarkus.http.test-port=0
 quarkus.log.level=INFO
 """
-
 
 def gen_constants(pkg, sn):
     short = to_short(sn)
@@ -392,6 +431,16 @@ public final class Constants {{
     public static final class MEDIATYPE {{
         private MEDIATYPE() {{}}
         public static final String APP_JSON = "application/json";
+    }}
+
+    public static final class KafkaHeaders {{
+        private KafkaHeaders() {{}}
+        public static final String TRANSACTION_ID = "TRANSACTION-ID";
+        public static final String KEYLOGIC       = "KEY-LOGIC";
+        public static final String PROCESS_TYPE   = "PROCESS-TYPE";
+        public static final String FLOW_TYPE      = "FLOW";
+        public static final String MESSAGE_KEY    = "MESSAGE-KEY";
+        public static final String CONTENT_TYPE   = "content-type";
     }}
 
     public static final class Topic {{
@@ -1068,7 +1117,6 @@ public class MdcHeadersFilter implements ContainerRequestFilter, ContainerRespon
         MDC.put(Constants.LogParams.KL,  kl);
         MDC.put(Constants.LogParams.TN,  tid);
         MDC.put(Constants.LogParams.PT,  pt);
-        MDC.put(Constants.LogParams.MA,  String.valueOf(ma));
         MDC.put(Constants.LogParams.API, req.getMethod() + " /" + req.getUriInfo().getPath());
     }}
 
@@ -1095,11 +1143,11 @@ public class MdcHeadersFilter implements ContainerRequestFilter, ContainerRespon
 }}
 """
 
-
 def gen_global_openapi_filter(pkg):
     return f"""\
 package {pkg}.filter;
 
+import java.util.Collections;
 import java.util.Map;
 
 import org.eclipse.microprofile.openapi.OASFactory;
@@ -1149,7 +1197,7 @@ public class GlobalHeadersOpenApiFilter implements OASFilter {{
     private Parameter header(String name, String description) {{
 
         Schema schema = OASFactory.createSchema();
-        schema.setType(Schema.SchemaType.STRING);
+        schema.setType(Collections.singletonList(Schema.SchemaType.STRING));
 
         Parameter p = OASFactory.createParameter();
         p.setName(name);
@@ -1187,6 +1235,39 @@ public class ApplicationConfig {{
     }}
     void onStop(@Observes io.quarkus.runtime.ShutdownEvent ev) {{
         LOG.infof("%s shutting down gracefully...", appName);
+    }}
+}}
+"""
+
+
+def gen_application_config_dg(pkg):
+    return f"""\
+package {pkg}.config;
+
+import java.time.LocalDateTime;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.logging.Logger;
+import io.quarkus.scheduler.Scheduled;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.event.Observes;
+
+@ApplicationScoped
+public class ApplicationConfig {{
+    private static final Logger LOG = Logger.getLogger(ApplicationConfig.class);
+    @ConfigProperty(name = "quarkus.application.name")    String appName;
+    @ConfigProperty(name = "quarkus.application.version") String appVersion;
+
+    void onStart(@Observes io.quarkus.runtime.StartupEvent ev) {{
+        LOG.infof("════════════════════════════════════════");
+        LOG.infof("  %s v%s started at %s", appName, appVersion, LocalDateTime.now());
+        LOG.infof("════════════════════════════════════════");
+    }}
+    void onStop(@Observes io.quarkus.runtime.ShutdownEvent ev) {{
+        LOG.infof("%s shutting down gracefully...", appName);
+    }}
+    @Scheduled(every = "1h", identity = "metrics-log")
+    void logMetrics() {{
+        LOG.infof("Metrics heartbeat - %s running", appName);
     }}
 }}
 """
@@ -1230,6 +1311,31 @@ public class OpenApiConfig {{}}
 """
 
 
+def gen_openapi_config_dg(pkg, sn):
+    title = " ".join(p.capitalize() for p in re.split(r"[-_]", sn)) + " DG API"
+    return f"""\
+package {pkg}.config;
+
+import org.eclipse.microprofile.openapi.annotations.OpenAPIDefinition;
+import org.eclipse.microprofile.openapi.annotations.enums.ParameterIn;
+import org.eclipse.microprofile.openapi.annotations.info.Info;
+import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;
+import org.eclipse.microprofile.openapi.annotations.servers.Server;
+
+@OpenAPIDefinition(
+    info = @Info(title = "{title}", version = "1.0"),
+    servers = @Server(url = "/"),
+    components = @org.eclipse.microprofile.openapi.annotations.Components(parameters = {{
+        @Parameter(name = "KEY-LOGIC",      in = ParameterIn.HEADER, description = "Chiave di correlazione tecnica",       required = false),
+        @Parameter(name = "TRANSACTION-ID", in = ParameterIn.HEADER, description = "Transaction id tecnico",               required = false),
+        @Parameter(name = "MOD-ASYNC",      in = ParameterIn.HEADER, description = "Modalità asincrona",                   required = false),
+        @Parameter(name = "PROCESS-TYPE",   in = ParameterIn.HEADER, description = "Tipo processo (GUI | FLUSSO | N/A)",   required = false)
+    }})
+)
+public class OpenApiConfig {{}}
+"""
+
+
 def gen_health_check(pkg):
     return f"""\
 package {pkg}.health;
@@ -1257,6 +1363,27 @@ public class ApplicationHealthCheck {{
             catch (Exception e) {{ LOG.error("Redis not ready", e); return HealthCheckResponse.down("redis-not-ready"); }}
         }}
     }}
+}}
+"""
+
+
+def gen_health_check_dg(pkg):
+    return f"""\
+package {pkg}.health;
+
+import org.eclipse.microprofile.health.*;
+import org.jboss.logging.Logger;
+import jakarta.enterprise.context.ApplicationScoped;
+
+@ApplicationScoped
+public class ApplicationHealthCheck {{
+    private static final Logger LOG = Logger.getLogger(ApplicationHealthCheck.class);
+
+    @Liveness
+    HealthCheck liveness() {{ return () -> HealthCheckResponse.up("service-alive"); }}
+
+    @Readiness
+    HealthCheck readiness() {{ return () -> HealthCheckResponse.up("service-ready"); }}
 }}
 """
 
@@ -1344,11 +1471,12 @@ public class TopicService {{
 
 
 def gen_kafka_producer(pkg, lib_pkg):
-    """Frontiera: usa RequestHeadersContext per arricchire automaticamente gli header."""
+    """Frontiera: producer con byte[], KafkaHeaders, sendBytesWithHeaders."""
     return f"""\
 package {pkg}.kafka;
 
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
@@ -1360,162 +1488,8 @@ import org.eclipse.microprofile.reactive.messaging.Message;
 import org.jboss.logging.Logger;
 
 import io.smallrye.reactive.messaging.kafka.api.OutgoingKafkaRecordMetadata;
-import {pkg}.filter.RequestHeadersContext;
 import {pkg}.service.TopicService;
 import {pkg}.utils.Constants;
-import {lib_pkg}.util.JsonUtils;
-import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.inject.Inject;
-
-@ApplicationScoped
-public class KafkaGenericProducer {{
-
-    private static final Logger LOG = Logger.getLogger(KafkaGenericProducer.class);
-
-    @Inject
-    TopicService topicService;
-
-    @Inject
-    RequestHeadersContext headersCtx;
-
-    @Inject
-    @Channel("kafka-out")
-    Emitter<String> emitter;
-
-    // ======================================================
-    // API pubblica — header letti automaticamente dal contesto
-    // ======================================================
-
-    public void sendEvent(String flow, String topic, Object payload) {{
-        String messageKey = UUID.randomUUID().toString();
-        sendInternal(flow, topic, messageKey, payload);
-    }}
-
-    public void sendSerialEvent(String flow, String topic, String messageKey, Object payload) {{
-        if (messageKey == null || messageKey.isBlank()) {{
-            messageKey = UUID.randomUUID().toString();
-        }}
-        sendInternal(flow, topic, messageKey, payload);
-    }}
-
-    // ======================================================
-    // API pubblica — header forniti esplicitamente dal chiamante
-    // ======================================================
-
-    public void sendSerialEventWithHeaders(String transId, String keyLogic, String processType,
-            String flow, String topic, String messageKey, Object payload) {{
-        if (messageKey == null) {{
-            messageKey = UUID.randomUUID().toString();
-        }}
-        send(topicService.getRealTopic(topic), messageKey,
-                JsonUtils.writeAsJsonPrettyLogStringWithoutNull(payload),
-                Map.of(
-                    Constants.Headers.TRANSACTION_ID, transId,
-                    Constants.Headers.KEYLOGIC,       keyLogic,
-                    Constants.Headers.PROCESS_TYPE,   processType,
-                    "FLOW",                            flow,
-                    Constants.Headers.MESSAGE_KEY,    messageKey,
-                    Constants.Headers.CONTENT_TYPE,   Constants.MEDIATYPE.APP_JSON
-                ));
-    }}
-
-    public void sendEventWithHeaders(String transId, String keyLogic, String processType,
-            String flow, String topic, Object payload) {{
-        String messageKey = UUID.randomUUID().toString();
-        send(topicService.getRealTopic(topic), messageKey,
-                JsonUtils.writeAsJsonPrettyLogStringWithoutNull(payload),
-                Map.of(
-                    Constants.Headers.TRANSACTION_ID, transId,
-                    Constants.Headers.KEYLOGIC,       keyLogic,
-                    Constants.Headers.PROCESS_TYPE,   processType,
-                    "FLOW",                            flow,
-                    Constants.Headers.MESSAGE_KEY,    messageKey,
-                    Constants.Headers.CONTENT_TYPE,   Constants.MEDIATYPE.APP_JSON
-                ));
-    }}
-
-    // ======================================================
-    // Internals
-    // ======================================================
-
-    private void sendInternal(String flow, String topic, String messageKey, Object payload) {{
-        String transId      = safeOrGenerated(headersCtx != null ? headersCtx.getTransactionId() : null);
-        String keyLogic     = safeOrGenerated(headersCtx != null ? headersCtx.getKeyLogic() : null);
-        String processType  = safeOrDefault(headersCtx != null ? headersCtx.getProcessType() : null, "N/A");
-
-        send(topicService.getRealTopic(topic),
-             messageKey,
-             JsonUtils.writeAsJsonPrettyLogStringWithoutNull(payload),
-             headersMap(transId, keyLogic, processType, flow, messageKey));
-    }}
-
-    private Map<String, String> headersMap(String transId, String keyLogic, String processType,
-                                           String flow, String messageKey) {{
-        return Map.of(
-            Constants.Headers.TRANSACTION_ID, transId,
-            Constants.Headers.KEYLOGIC,       keyLogic,
-            Constants.Headers.PROCESS_TYPE,   processType,
-            "FLOW",                            flow,
-            Constants.Headers.MESSAGE_KEY,    messageKey,
-            Constants.Headers.CONTENT_TYPE,   Constants.MEDIATYPE.APP_JSON
-        );
-    }}
-
-    private void send(String topic, String key, String payload, Map<String, String> headers) {{
-        Headers kafkaHeaders = toKafkaHeaders(headers);
-        OutgoingKafkaRecordMetadata<String> metadata =
-            OutgoingKafkaRecordMetadata.<String>builder()
-                .withTopic(topic)
-                .withKey(key)
-                .withHeaders(kafkaHeaders)
-                .build();
-        Message<String> message = Message.of(payload).addMetadata(metadata);
-        LOG.debugf("Sending message to topic [%s] with key [%s]", topic, key);
-        emitter.send(message);
-    }}
-
-    private Headers toKafkaHeaders(Map<String, String> headers) {{
-        Headers kafkaHeaders = new RecordHeaders();
-        if (headers != null) {{
-            headers.forEach((k, v) -> {{
-                if (v != null) {{
-                    kafkaHeaders.add(k, v.getBytes(StandardCharsets.UTF_8));
-                }}
-            }});
-        }}
-        return kafkaHeaders;
-    }}
-
-    private String safeOrGenerated(String v) {{
-        return (v == null || v.isBlank()) ? UUID.randomUUID().toString() : v;
-    }}
-
-    private String safeOrDefault(String v, String def) {{
-        return (v == null || v.isBlank()) ? def : v;
-    }}
-}}
-"""
-
-
-def gen_kafka_producer_dg(pkg, lib_pkg):
-    """DataGateway: senza RequestHeadersContext, usa Instance<JsonWebToken> per sicurezza JWT."""
-    return f"""\
-package {pkg}.kafka;
-
-import java.nio.charset.StandardCharsets;
-import java.util.Map;
-import java.util.UUID;
-
-import org.apache.kafka.common.header.Headers;
-import org.apache.kafka.common.header.internals.RecordHeaders;
-import org.eclipse.microprofile.reactive.messaging.Channel;
-import org.eclipse.microprofile.reactive.messaging.Emitter;
-import org.eclipse.microprofile.reactive.messaging.Message;
-import org.jboss.logging.Logger;
-
-import io.smallrye.reactive.messaging.kafka.api.OutgoingKafkaRecordMetadata;
-import {pkg}.service.TopicService;
-import {lib_pkg}.util.JsonUtils;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
@@ -1529,78 +1503,74 @@ public class KafkaGenericProducer {{
 
     @Inject
     @Channel("kafka-out")
-    Emitter<String> emitter;
+    Emitter<byte[]> emitter;
 
     // ======================================================
     // API pubblica — header generati automaticamente
     // ======================================================
 
-    public void sendEvent(String flow, String topic, Object payload) {{
+    public void sendEvent(String flow, String topic, byte[] payload) {{
         String messageKey = UUID.randomUUID().toString();
-        sendInternal(flow, topic, messageKey, payload);
+        sendInternal(flow, topic, messageKey, payload, null);
     }}
 
-    public void sendSerialEvent(String flow, String topic, String messageKey, Object payload) {{
+    public void sendSerialEvent(String flow, String topic, String messageKey, byte[] payload) {{
         if (messageKey == null || messageKey.isBlank()) {{
             messageKey = UUID.randomUUID().toString();
         }}
-        sendInternal(flow, topic, messageKey, payload);
+        sendInternal(flow, topic, messageKey, payload, null);
     }}
 
     // ======================================================
     // API pubblica — header forniti esplicitamente dal chiamante
     // ======================================================
 
-    public void sendSerialEventWithHeaders(String transId, String keyLogic, String processType,
-            String flow, String topic, String messageKey, Object payload) {{
-        if (messageKey == null) {{
+    public void sendBytesWithHeaders(String transId, String keyLogic, String processType,
+            String flow, String topic, String messageKey, byte[] payload,
+            Map<String, String> extraHeaders) {{
+        if (messageKey == null || messageKey.isBlank()) {{
             messageKey = UUID.randomUUID().toString();
         }}
-        send(topicService.getRealTopic(topic), messageKey,
-                JsonUtils.writeAsJsonPrettyLogStringWithoutNull(payload),
-                Map.of("TRANSACTION-ID", transId, "KEY-LOGIC", keyLogic,
-                       "PROCESS-TYPE", processType, "FLOW", flow,
-                       "MESSAGE-KEY", messageKey, "content-type", "application/json"));
+        sendInternal(flow, topic, messageKey, payload,
+                buildHeadersMap(transId, keyLogic, processType, flow, messageKey, extraHeaders));
+    }}
+
+    public void sendSerialEventWithHeaders(String transId, String keyLogic, String processType,
+            String flow, String topic, String messageKey, byte[] payload) {{
+        sendBytesWithHeaders(transId, keyLogic, processType, flow, topic, messageKey, payload, null);
     }}
 
     public void sendEventWithHeaders(String transId, String keyLogic, String processType,
-            String flow, String topic, Object payload) {{
+            String flow, String topic, byte[] payload) {{
         String messageKey = UUID.randomUUID().toString();
-        send(topicService.getRealTopic(topic), messageKey,
-                JsonUtils.writeAsJsonPrettyLogStringWithoutNull(payload),
-                Map.of("TRANSACTION-ID", transId, "KEY-LOGIC", keyLogic,
-                       "PROCESS-TYPE", processType, "FLOW", flow,
-                       "MESSAGE-KEY", messageKey, "content-type", "application/json"));
+        sendBytesWithHeaders(transId, keyLogic, processType, flow, topic, messageKey, payload, null);
     }}
 
-    // ======================================================
-    // Internals
-    // ======================================================
-
-    private void sendInternal(String flow, String topic, String messageKey, Object payload) {{
-        String transId     = safeOrGenerated(null);
-        String keyLogic    = safeOrGenerated(null);
-        String processType = safeOrDefault(null, "N/A");
-
-        send(topicService.getRealTopic(topic),
-             messageKey,
-             JsonUtils.writeAsJsonPrettyLogStringWithoutNull(payload),
-             headersMap(transId, keyLogic, processType, flow, messageKey));
+    private void sendInternal(String flow, String topic, String messageKey,
+            byte[] payload, Map<String, String> headersOverride) {{
+        if (headersOverride == null) {{
+            String transId     = UUID.randomUUID().toString();
+            String keyLogic    = UUID.randomUUID().toString();
+            String processType = "N/A";
+            headersOverride = buildHeadersMap(transId, keyLogic, processType, flow, messageKey, null);
+        }}
+        send(topicService.getRealTopic(topic), messageKey, payload, headersOverride);
     }}
 
-    private Map<String, String> headersMap(String transId, String keyLogic, String processType,
-                                           String flow, String messageKey) {{
-        return Map.of(
-            "TRANSACTION-ID", transId,
-            "KEY-LOGIC",      keyLogic,
-            "PROCESS-TYPE",   processType,
-            "FLOW",           flow,
-            "MESSAGE-KEY",    messageKey,
-            "content-type",   "application/json"
-        );
+    private Map<String, String> buildHeadersMap(String transId, String keyLogic, String processType,
+            String flow, String messageKey, Map<String, String> extra) {{
+        Map<String, String> map = new HashMap<>();
+        map.put(Constants.KafkaHeaders.TRANSACTION_ID, transId);
+        map.put(Constants.KafkaHeaders.KEYLOGIC,       keyLogic);
+        map.put(Constants.KafkaHeaders.PROCESS_TYPE,   processType);
+        map.put(Constants.KafkaHeaders.FLOW_TYPE,      flow);
+        map.put(Constants.KafkaHeaders.MESSAGE_KEY,    messageKey);
+        map.put(Constants.KafkaHeaders.CONTENT_TYPE,   Constants.MEDIATYPE.APP_JSON);
+        if (extra != null) map.putAll(extra);
+        return map;
     }}
 
-    private void send(String topic, String key, String payload, Map<String, String> headers) {{
+    private void send(String topic, String key, byte[] payload, Map<String, String> headers) {{
         Headers kafkaHeaders = toKafkaHeaders(headers);
         OutgoingKafkaRecordMetadata<String> metadata =
             OutgoingKafkaRecordMetadata.<String>builder()
@@ -1608,7 +1578,7 @@ public class KafkaGenericProducer {{
                 .withKey(key)
                 .withHeaders(kafkaHeaders)
                 .build();
-        Message<String> message = Message.of(payload).addMetadata(metadata);
+        Message<byte[]> message = Message.of(payload).addMetadata(metadata);
         LOG.debugf("Sending message to topic [%s] with key [%s]", topic, key);
         emitter.send(message);
     }}
@@ -1624,41 +1594,232 @@ public class KafkaGenericProducer {{
         }}
         return kafkaHeaders;
     }}
-
-    private String safeOrGenerated(String v) {{
-        return (v == null || v.isBlank()) ? UUID.randomUUID().toString() : v;
-    }}
-
-    private String safeOrDefault(String v, String def) {{
-        return (v == null || v.isBlank()) ? def : v;
-    }}
 }}
 """
 
-
-def gen_kafka_consumer(pkg):
+def gen_kafka_producer_dg(pkg, lib_pkg):
+    """DataGateway: producer con byte[], KafkaHeaders, sendBytesWithHeaders. Identico a frontiera."""
     return f"""\
 package {pkg}.kafka;
 
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
+
+import org.apache.kafka.common.header.Headers;
+import org.apache.kafka.common.header.internals.RecordHeaders;
+import org.eclipse.microprofile.reactive.messaging.Channel;
+import org.eclipse.microprofile.reactive.messaging.Emitter;
+import org.eclipse.microprofile.reactive.messaging.Message;
 import org.jboss.logging.Logger;
+
+import io.smallrye.reactive.messaging.kafka.api.OutgoingKafkaRecordMetadata;
 import {pkg}.service.TopicService;
+import {pkg}.utils.Constants;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
-/** Consumer Kafka generico. Aggiungere metodi @Incoming("kafka-in") per ogni topic. */
 @ApplicationScoped
-public class KafkaGenericConsumer {{
-    private static final Logger LOG = Logger.getLogger(KafkaGenericConsumer.class);
-    @Inject TopicService topicService;
-    // Esempio:
-    // @Incoming("kafka-in") @Blocking
-    // public CompletionStage<Void> consume(Message<String> message) {{
-    //     LOG.infof("Received: %s", message.getPayload());
-    //     return message.ack();
-    // }}
+public class KafkaGenericProducer {{
+
+    private static final Logger LOG = Logger.getLogger(KafkaGenericProducer.class);
+
+    @Inject
+    TopicService topicService;
+
+    @Inject
+    @Channel("kafka-out")
+    Emitter<byte[]> emitter;
+
+    public void sendEvent(String flow, String topic, byte[] payload) {{
+        String messageKey = UUID.randomUUID().toString();
+        sendInternal(flow, topic, messageKey, payload, null);
+    }}
+
+    public void sendSerialEvent(String flow, String topic, String messageKey, byte[] payload) {{
+        if (messageKey == null || messageKey.isBlank()) {{
+            messageKey = UUID.randomUUID().toString();
+        }}
+        sendInternal(flow, topic, messageKey, payload, null);
+    }}
+
+    public void sendBytesWithHeaders(String transId, String keyLogic, String processType,
+            String flow, String topic, String messageKey, byte[] payload,
+            Map<String, String> extraHeaders) {{
+        if (messageKey == null || messageKey.isBlank()) {{
+            messageKey = UUID.randomUUID().toString();
+        }}
+        sendInternal(flow, topic, messageKey, payload,
+                buildHeadersMap(transId, keyLogic, processType, flow, messageKey, extraHeaders));
+    }}
+
+    public void sendSerialEventWithHeaders(String transId, String keyLogic, String processType,
+            String flow, String topic, String messageKey, byte[] payload) {{
+        sendBytesWithHeaders(transId, keyLogic, processType, flow, topic, messageKey, payload, null);
+    }}
+
+    public void sendEventWithHeaders(String transId, String keyLogic, String processType,
+            String flow, String topic, byte[] payload) {{
+        String messageKey = UUID.randomUUID().toString();
+        sendBytesWithHeaders(transId, keyLogic, processType, flow, topic, messageKey, payload, null);
+    }}
+
+    private void sendInternal(String flow, String topic, String messageKey,
+            byte[] payload, Map<String, String> headersOverride) {{
+        if (headersOverride == null) {{
+            String transId     = UUID.randomUUID().toString();
+            String keyLogic    = UUID.randomUUID().toString();
+            String processType = "N/A";
+            headersOverride = buildHeadersMap(transId, keyLogic, processType, flow, messageKey, null);
+        }}
+        send(topicService.getRealTopic(topic), messageKey, payload, headersOverride);
+    }}
+
+    private Map<String, String> buildHeadersMap(String transId, String keyLogic, String processType,
+            String flow, String messageKey, Map<String, String> extra) {{
+        Map<String, String> map = new HashMap<>();
+        map.put(Constants.KafkaHeaders.TRANSACTION_ID, transId);
+        map.put(Constants.KafkaHeaders.KEYLOGIC,       keyLogic);
+        map.put(Constants.KafkaHeaders.PROCESS_TYPE,   processType);
+        map.put(Constants.KafkaHeaders.FLOW_TYPE,      flow);
+        map.put(Constants.KafkaHeaders.MESSAGE_KEY,    messageKey);
+        map.put(Constants.KafkaHeaders.CONTENT_TYPE,   Constants.MEDIATYPE.APP_JSON);
+        if (extra != null) map.putAll(extra);
+        return map;
+    }}
+
+    private void send(String topic, String key, byte[] payload, Map<String, String> headers) {{
+        Headers kafkaHeaders = toKafkaHeaders(headers);
+        OutgoingKafkaRecordMetadata<String> metadata =
+            OutgoingKafkaRecordMetadata.<String>builder()
+                .withTopic(topic)
+                .withKey(key)
+                .withHeaders(kafkaHeaders)
+                .build();
+        Message<byte[]> message = Message.of(payload).addMetadata(metadata);
+        LOG.debugf("Sending message to topic [%s] with key [%s]", topic, key);
+        emitter.send(message);
+    }}
+
+    private Headers toKafkaHeaders(Map<String, String> headers) {{
+        Headers kafkaHeaders = new RecordHeaders();
+        if (headers != null) {{
+            headers.forEach((k, v) -> {{
+                if (v != null) {{
+                    kafkaHeaders.add(k, v.getBytes(StandardCharsets.UTF_8));
+                }}
+            }});
+        }}
+        return kafkaHeaders;
+    }}
 }}
 """
 
+def gen_kafka_consumer(pkg, sn=None):
+    topic_ref = f"Topic.{to_short(sn).upper()}_TOPIC" if sn else "Topic.getAllTopicsValue().get(0)"
+    return f"""\
+package {pkg}.kafka;
+
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.CompletionStage;
+import java.util.function.BiConsumer;
+
+import org.apache.kafka.common.header.Header;
+import org.apache.kafka.common.header.Headers;
+import org.apache.kafka.common.header.internals.RecordHeaders;
+import org.eclipse.microprofile.reactive.messaging.Acknowledgment;
+import org.eclipse.microprofile.reactive.messaging.Incoming;
+import org.eclipse.microprofile.reactive.messaging.Message;
+import org.jboss.logging.Logger;
+import org.jboss.logging.MDC;
+
+import io.smallrye.common.annotation.Blocking;
+import io.smallrye.reactive.messaging.kafka.api.IncomingKafkaRecordMetadata;
+import {pkg}.service.TopicService;
+import {pkg}.utils.Constants;
+import {pkg}.utils.Constants.Topic;
+import jakarta.annotation.PostConstruct;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+
+@ApplicationScoped
+public class KafkaGenericConsumer {{
+
+    private static final Logger LOG = Logger.getLogger(KafkaGenericConsumer.class);
+    private static final int MAX_PAYLOAD_BYTES = 1_000_000;
+
+    @Inject
+    TopicService topicService;
+
+    private Map<String, BiConsumer<byte[], Headers>> handlers;
+
+    @PostConstruct
+    void init() {{
+        handlers = new HashMap<>();
+        handlers.put(topicService.getRealTopic({topic_ref}), this::handleSampleIn);
+        handlers.keySet().forEach(t -> LOG.infof("Kafka handler registered for topic: %s", t));
+    }}
+
+    @Incoming("anagrafica-flussi-in")
+    @Acknowledgment(Acknowledgment.Strategy.MANUAL)
+    @Blocking
+    public CompletionStage<Void> consumeOne(Message<byte[]> message) {{
+        try {{
+            IncomingKafkaRecordMetadata<?, ?> metadata = message.getMetadata(IncomingKafkaRecordMetadata.class).orElse(null);
+            String topic = metadata != null ? metadata.getTopic() : "unknown";
+            Headers headers = metadata != null ? metadata.getHeaders() : new RecordHeaders();
+            byte[] payloadBytes = message.getPayload();
+
+            MDC.put(Constants.LogParams.TN, extractHeader(headers, Constants.KafkaHeaders.TRANSACTION_ID));
+            MDC.put(Constants.LogParams.KL, extractHeader(headers, Constants.KafkaHeaders.KEYLOGIC));
+            MDC.put(Constants.LogParams.PT, extractHeader(headers, Constants.KafkaHeaders.PROCESS_TYPE));
+            MDC.put(Constants.LogParams.MK, extractHeader(headers, Constants.KafkaHeaders.MESSAGE_KEY));
+
+            if (payloadBytes == null || payloadBytes.length > MAX_PAYLOAD_BYTES) {{
+                LOG.errorf("Payload null o troppo grande (%%d bytes), skip", payloadBytes == null ? 0 : payloadBytes.length);
+                return message.ack();
+            }}
+
+            handlers.getOrDefault(topic, this::handleGeneric).accept(payloadBytes, headers);
+            return message.ack();
+        }} catch (Exception e) {{
+            LOG.error("Error processing Kafka message", e);
+            return message.ack();
+        }} finally {{
+            MDC.clear();
+        }}
+    }}
+
+    private void handleSampleIn(byte[] payloadBytes, Headers headers) {{
+        String payload = new String(payloadBytes, StandardCharsets.UTF_8);
+        LOG.infof("handleSampleIn: processing payload length=%%d", payloadBytes.length);
+        String flow = extractHeader(headers, Constants.KafkaHeaders.FLOW_TYPE);
+        if (flow != null && !flow.isBlank()) {{
+            switch (flow) {{
+                case "SAMPLE_FLOW":
+                    // TODO: chiamare il service appropriato
+                    LOG.infof("Flow SAMPLE_FLOW ricevuto, payload=%%s", payload);
+                    break;
+                default:
+                    LOG.warnf("Unknown flow '%%s' in message headers, skipping", flow);
+            }}
+        }}
+    }}
+
+    private void handleGeneric(byte[] payloadBytes, Headers headers) {{
+        LOG.warn("No specific handler found for topic, using generic handler");
+    }}
+
+    private String extractHeader(Headers headers, String name) {{
+        if (headers == null) return "";
+        Header header = headers.lastHeader(name);
+        return header != null ? new String(header.value(), StandardCharsets.UTF_8) : "";
+    }}
+}}
+"""
 
 def gen_sample_dto(pkg):
     return f"""\
@@ -2224,7 +2385,7 @@ def gen_pom_dg(sn, pkg, lib_group, lib_artifact):
         <maven-surefire-plugin.version>3.2.5</maven-surefire-plugin.version>
         <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
         <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
-        <quarkus.platform.version>3.9.2</quarkus.platform.version>
+        <quarkus.platform.version>3.34.5</quarkus.platform.version>
         <mapstruct.version>1.6.3</mapstruct.version>
         <shedlock.version>5.13.0</shedlock.version>
         <sonar.sources>
@@ -2235,7 +2396,6 @@ def gen_pom_dg(sn, pkg, lib_group, lib_artifact):
         <sonar.dynamicAnalysis>reuseReports</sonar.dynamicAnalysis>
         <sonar.language>java</sonar.language>
         <sonar.coverage.jacoco.xmlReportPaths>target/site/jacoco/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
-        <quarkus.package.type>jar</quarkus.package.type>
         <argLine/>
     </properties>
 
@@ -2281,8 +2441,7 @@ def gen_pom_dg(sn, pkg, lib_group, lib_artifact):
         </dependency>
         <!-- KAFKA -->
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-messaging-kafka</artifactId></dependency>
-        <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-smallrye-reactive-messaging-kafka</artifactId></dependency>
-        <!-- REDIS -->
+        <!-- REDIS / CACHE -->
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-redis-client</artifactId></dependency>
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-cache</artifactId></dependency>
         <!-- SECURITY -->
@@ -2305,7 +2464,7 @@ def gen_pom_dg(sn, pkg, lib_group, lib_artifact):
         <!-- FAULT TOLERANCE -->
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-smallrye-fault-tolerance</artifactId></dependency>
         <!-- TEST -->
-        <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-junit5-mockito</artifactId><scope>test</scope></dependency>
+        <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-junit-mockito</artifactId><scope>test</scope></dependency>
         <dependency><groupId>io.rest-assured</groupId><artifactId>rest-assured</artifactId><scope>test</scope></dependency>
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-jdbc-h2</artifactId><scope>test</scope></dependency>
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-panache-mock</artifactId><scope>test</scope></dependency>
@@ -2316,12 +2475,14 @@ def gen_pom_dg(sn, pkg, lib_group, lib_artifact):
             <plugin>
                 <groupId>io.quarkus</groupId><artifactId>quarkus-maven-plugin</artifactId>
                 <version>${{quarkus.platform.version}}</version>
+                <extensions>true</extensions>
                 <executions><execution><goals><goal>build</goal></goals></execution></executions>
             </plugin>
             <plugin>
                 <artifactId>maven-compiler-plugin</artifactId><version>${{compiler-plugin.version}}</version>
                 <configuration>
-                    <release>${{java.version}}</release>
+                    <source>${{java.version}}</source>
+                    <target>${{java.version}}</target>
                     <annotationProcessorPaths>
                         <path><groupId>org.mapstruct</groupId><artifactId>mapstruct-processor</artifactId><version>${{mapstruct.version}}</version></path>
                         <path><groupId>org.projectlombok</groupId><artifactId>lombok</artifactId><version>${{lombok.version}}</version></path>
@@ -2347,7 +2508,6 @@ def gen_pom_dg(sn, pkg, lib_group, lib_artifact):
 </project>
 """
 
-
 def gen_application_properties_dg(sn, pkg, lib_pkg):
     short = to_short(sn)
     return f"""\
@@ -2355,14 +2515,12 @@ def gen_application_properties_dg(sn, pkg, lib_pkg):
 # QUARKUS CORE
 ############################################
 quarkus.application.name={sn}
-#quarkus.http.root-path=${{kapp:prefix}}
-quarkus.http.port=${{QUARKUS_PORT:8090}}
+quarkus.http.port=${{QUARKUS_HTTP_PORT:8090}}
 quarkus.package.output-name={sn}
 
 ############################################
 # LOGGING - GLOBAL
 ############################################
-quarkus.log.console.enable=true
 quarkus.log.level=${{LOG_LEVEL_ROOT_CONSOLE:INFO}}
 quarkus.log.category."io.quarkus.confluent".level=ERROR
 quarkus.log.console.format=[%5p] %d{{yyyy-MM-dd HH:mm:ss.SSS}} API:%X{{API}} TRANS-ID:%X{{TN}} KEY-LOGIC:%X{{KL}} MESSAGE-KEY:%X{{MK}} PROCESS-TYPE:%X{{PT}} [%t] %c{{1}} - %s%e%n
@@ -2376,18 +2534,19 @@ quarkus.log.category."{pkg}.resource".level=${{LOG_LEVEL_CONTROLLER_CONSOLE:INFO
 quarkus.log.category."{lib_pkg}.interceptor".level=INFO
 
 ############################################
-# DATASOURCE - SQL SERVER
+# DATASOURCE - SQL SERVER (AZURE)
 ############################################
 quarkus.datasource.db-kind=mssql
-quarkus.datasource.username=${{DB_USERNAME:sa}}
-quarkus.datasource.password=${{DB_PASSWORD:Password1!}}
-quarkus.datasource.jdbc.url=${{DB_URL:jdbc:sqlserver://localhost:1433;databaseName={short};encrypt=true;trustServerCertificate=true;loginTimeout=30}}
+quarkus.datasource.username=${{QUARKUS_DATASOURCE_USERNAME:ut-2767-aro-d}}
+quarkus.datasource.password=${{QUARKUS_DATASOURCE_PASSWORD:Password1!}}
+quarkus.datasource.jdbc.url=jdbc:sqlserver://${{QUARKUS_DB_HOST:localhost}}:1433;databaseName={short};encrypt=true;trustServerCertificate=false;loginTimeout=30
 
 ############################################
 # HIBERNATE ORM / ENVERS
 ############################################
-quarkus.hibernate-orm.database.generation=none
+quarkus.hibernate-orm.sql-load-script=no-file
 quarkus.hibernate-orm.log.sql=false
+quarkus.hibernate-envers.audit-table-suffix=_aud
 
 ############################################
 # FLYWAY
@@ -2397,60 +2556,116 @@ quarkus.flyway.migrate-at-start=false
 quarkus.flyway.baseline-on-migrate=false
 
 ############################################
-# REDIS
+# REDIS (NON MODIFICATO)
 ############################################
-quarkus.redis.hosts=${{REDIS_HOSTS:redis://localhost:6379}}
+quarkus.redis.hosts=${{REDIS_SSL:redis://}}${{REDIS_HOSTS:localhost}}:${{REDIS_PORT:6379}}
+quarkus.redis.password=${{REDIS_PASSWORD}}
 
 ############################################
-# APP CACHE
+# CACHE
 ############################################
 quarkus.cache.enabled=true
-quarkus.cache.caffeine."{short}-sample".expire-after-write=10M
+
 
 ############################################
 # KAFKA
 ############################################
 kafka.bootstrap.servers=${{KAFKA_BOOTSTRAP_SERVERS:localhost:${{KAFKA_SERVER_PORT:9092}}}}
-kafka-prefix.topics=${{KAFKA_TOPIC_PREFIX:prefix}}
-kafka.security.protocol=SASL_SSL
-kafka.sasl.mechanism=PLAIN
-kafka.sasl.jaas.username=${{KAFKA_API_KEY:XXXXXXXXXX}}
-kafka.sasl.jaas.password=${{KAFKA_API_SECRET:YYYYYYYYYY}}
-kafka.sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="${{kafka.sasl.jaas.username}}" password="${{kafka.sasl.jaas.password}}";
+kafka-prefix.topics=${{KAFKA_TOPIC_PREFIX:2767-d}}
+
+
+# Timeouts / stabilità rete
 kafka.request.timeout.ms=30000
 kafka.connections.max.idle.ms=540000
 kafka.reconnect.backoff.ms=1000
 kafka.reconnect.backoff.max.ms=10000
 kafka.socket.keepalive.enable=true
 
+# LIMITI BUFFER (prevenzione OOM lato client)
+kafka.receive.buffer.bytes=65536
+kafka.send.buffer.bytes=131072
+
 ############################################
-# KAFKA PRODUCER
+# KAFKA PRODUCER GENERICO
 ############################################
 mp.messaging.outgoing.kafka-out.connector=smallrye-kafka
 mp.messaging.outgoing.kafka-out.bootstrap.servers=${{kafka.bootstrap.servers}}
 mp.messaging.outgoing.kafka-out.key.serializer=org.apache.kafka.common.serialization.StringSerializer
-mp.messaging.outgoing.kafka-out.value.serializer=org.apache.kafka.common.serialization.StringSerializer
+mp.messaging.outgoing.kafka-out.value.serializer=org.apache.kafka.common.serialization.ByteArraySerializer
 mp.messaging.outgoing.kafka-out.acks=all
 mp.messaging.outgoing.kafka-out.retries=3
 
+mp.messaging.outgoing.kafka-out.security.protocol=SASL_SSL
+mp.messaging.outgoing.kafka-out.sasl.mechanism=PLAIN
+mp.messaging.outgoing.kafka-out.sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="${{KAFKA_API_KEY}}" password="${{KAFKA_API_SECRET}}";
+
+
+# LIMITI PRODUCER MEMORY
+mp.messaging.outgoing.kafka-out.batch.size=16384
+mp.messaging.outgoing.kafka-out.linger.ms=5
+mp.messaging.outgoing.kafka-out.buffer.memory=8388608
+
 ############################################
-# KAFKA CONSUMER - sample-in
+# GENERIC KAFKA CONSUMER (STRING)
 ############################################
-mp.messaging.incoming.sample-in.connector=smallrye-kafka
-mp.messaging.incoming.sample-in.bootstrap.servers=${{kafka.bootstrap.servers}}
-mp.messaging.incoming.sample-in.group.id=groupId-{sn}
-mp.messaging.incoming.sample-in.auto.offset.reset=earliest
-mp.messaging.incoming.sample-in.value.deserializer=org.apache.kafka.common.serialization.StringDeserializer
-mp.messaging.incoming.sample-in.enable.auto.commit=false
-mp.messaging.incoming.sample-in.max.poll.records=1
-mp.messaging.incoming.sample-in.topic=${{kafka-prefix.topics}}-{short}-in
+
+# =====================
+# FLUSSI
+# =====================
+mp.messaging.incoming.monitor-flussi-in.connector=smallrye-kafka
+mp.messaging.incoming.monitor-flussi-in.bootstrap.servers=${{kafka.bootstrap.servers}}
+mp.messaging.incoming.monitor-flussi-in.group.id=groupId-{sn}
+mp.messaging.incoming.monitor-flussi-in.auto.offset.reset=latest
+mp.messaging.incoming.monitor-flussi-in.value.deserializer=org.apache.kafka.common.serialization.ByteArrayDeserializer
+mp.messaging.incoming.monitor-flussi-in.key.deserializer=org.apache.kafka.common.serialization.StringDeserializer
+mp.messaging.incoming.monitor-flussi-in.enable.auto.commit=false
+mp.messaging.incoming.monitor-flussi-in.max.poll.records=1
+mp.messaging.incoming.monitor-flussi-in.fetch.max.bytes=262144
+mp.messaging.incoming.monitor-flussi-in.max.partition.fetch.bytes=262144
+mp.messaging.incoming.monitor-flussi-in.session.timeout.ms=15000
+mp.messaging.incoming.monitor-flussi-in.max.poll.interval.ms=300000
+mp.messaging.incoming.monitor-flussi-in.max-queue-size-factor=1
+mp.messaging.incoming.monitor-flussi-in.max-inflight-messages=1
+mp.messaging.incoming.monitor-flussi-in.topic=${{kafka-prefix.topics}}-{short}-FLUSSI
+
+mp.messaging.incoming.monitor-flussi-in.security.protocol=SASL_SSL
+mp.messaging.incoming.monitor-flussi-in.sasl.mechanism=PLAIN
+mp.messaging.incoming.monitor-flussi-in.sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="${{KAFKA_API_KEY}}" password="${{KAFKA_API_SECRET}}";
+
+
+# =====================
+# BATCH
+# =====================
+mp.messaging.incoming.monitor-batch-in.connector=smallrye-kafka
+mp.messaging.incoming.monitor-batch-in.bootstrap.servers=${{kafka.bootstrap.servers}}
+mp.messaging.incoming.monitor-batch-in.group.id=groupId-{sn}
+mp.messaging.incoming.monitor-batch-in.auto.offset.reset=latest
+mp.messaging.incoming.monitor-batch-in.value.deserializer=org.apache.kafka.common.serialization.ByteArrayDeserializer
+mp.messaging.incoming.monitor-batch-in.key.deserializer=org.apache.kafka.common.serialization.StringDeserializer
+mp.messaging.incoming.monitor-batch-in.enable.auto.commit=false
+mp.messaging.incoming.monitor-batch-in.max.poll.records=1
+mp.messaging.incoming.monitor-batch-in.fetch.max.bytes=262144
+mp.messaging.incoming.monitor-batch-in.max.partition.fetch.bytes=262144
+mp.messaging.incoming.monitor-batch-in.session.timeout.ms=15000
+mp.messaging.incoming.monitor-batch-in.max.poll.interval.ms=300000
+mp.messaging.incoming.monitor-batch-in.topic=${{kafka-prefix.topics}}-{short}-BATCH
+mp.messaging.incoming.monitor-batch-in.max-inflight-messages=1
+mp.messaging.incoming.monitor-batch-in.max-queue-size-factor=1
+
+mp.messaging.incoming.monitor-batch-in.security.protocol=SASL_SSL
+mp.messaging.incoming.monitor-batch-in.sasl.mechanism=PLAIN
+mp.messaging.incoming.monitor-batch-in.sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="${{KAFKA_API_KEY}}" password="${{KAFKA_API_SECRET}}";
+
+
+
+#mp.messaging.incoming.monitor-flussi-in.enabled=false
+#mp.messaging.incoming.monitor-batch-in.enabled=false
+#mp.messaging.outgoing.kafka-out.enabled=false
 
 ############################################
 # SECURITY - OIDC
 ############################################
-quarkus.oidc.auth-server-url=${{OIDC_AUTH_SERVER_URL:http://localhost:8080/realms/myrealm}}
-quarkus.oidc.client-id=${{OIDC_CLIENT_ID:quarkus-client}}
-quarkus.oidc.credentials.secret=${{OIDC_SECRET:mysecret}}
+quarkus.oidc.enabled=false
 
 ############################################
 # OBSERVABILITY
@@ -2470,12 +2685,7 @@ mp.openapi.filter={pkg}.filter.GlobalHeadersOpenApiFilter
 # SCHEDULER
 ############################################
 quarkus.scheduler.enabled=true
-
-############################################
-# SHEDLOCK (cluster-safe distributed lock)
-############################################
-# Tabella shedlock deve esistere in DB (vedi V1__CREATE_TABLES.sql)
-# La tabella viene usata da ShedLockConfig (JdbcTemplateLockProvider)
+#quarkus.scheduler.enabled=false
 
 ############################################
 # DEV PROFILE
@@ -2485,43 +2695,82 @@ quarkus.scheduler.enabled=true
 %dev.quarkus.http.auth.permission.public.paths=/*
 %dev.quarkus.http.auth.permission.public.policy=permit
 %dev.security.enabled=false
-%dev.kafka.bootstrap.servers=localhost:${{KAFKA_SERVER_PORT:9092}}
-%dev.kafka.security.protocol=PLAINTEXT
-%dev.kafka.topics.auto-create=true
-"""
 
+%dev.kafka.bootstrap.servers=localhost:${{KAFKA_SERVER_PORT:9092}}
+%dev.kafka.topics.auto-create=true
+%dev.mp.messaging.outgoing.kafka-out.security.protocol=PLAINTEXT
+%dev.mp.messaging.incoming.monitor-flussi-in.security.protocol=PLAINTEXT
+%dev.mp.messaging.incoming.monitor-batch-in.security.protocol=PLAINTEXT
+
+%dev.quarkus.redis.hosts=redis://localhost:6379
+%dev.quarkus.devservices.enabled=false
+%dev.quarkus.datasource.devservices.enabled=false
+"""
 
 def gen_application_test_properties_dg():
     return """\
-# Database H2 in memoria per i test
+############################################
+# DATABASE H2 IN MEMORIA PER TEST
+############################################
 quarkus.datasource.db-kind=h2
-quarkus.datasource.jdbc.url=jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+quarkus.datasource.jdbc.url=jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;NON_KEYWORDS=VALUE
 quarkus.datasource.username=sa
 quarkus.datasource.password=sa
 
-quarkus.flyway.migrate-at-start=true
-quarkus.security.enabled=false
+quarkus.hibernate-orm.database.generation=drop-and-create
+quarkus.hibernate-orm.sql-load-script=no-file
+quarkus.hibernate-orm.log.sql=false
+
+############################################
+# FLYWAY DISABILITATO NEI TEST
+############################################
+quarkus.flyway.enabled=false
+quarkus.flyway.migrate-at-start=false
+
+############################################
+# SECURITY / OIDC DISABILITATI
+############################################
 quarkus.oidc.enabled=false
+quarkus.http.auth.permission.public.paths=/*
+quarkus.http.auth.permission.public.policy=permit
+security.enabled=false
+
+############################################
+# KAFKA IN-MEMORY
+############################################
 quarkus.kafka.devservices.enabled=false
 quarkus.apicurio-registry.devservices.enabled=false
+kafka-prefix.topics=test
+mp.messaging.incoming.monitor-flussi-in.connector=smallrye-in-memory
+mp.messaging.incoming.monitor-flussi-in.merge=true
+mp.messaging.incoming.monitor-batch-in.connector=smallrye-in-memory
+mp.messaging.incoming.monitor-batch-in.merge=true
+mp.messaging.outgoing.kafka-out.connector=smallrye-in-memory
 
-quarkus.log.level=INFO
-quarkus.log.category."io.quarkus".level=DEBUG
+############################################
+# SCHEDULER DISABILITATO NEI TEST
+############################################
+quarkus.scheduler.enabled=false
 
-quarkus.hibernate-orm.database.generation=drop-and-create
-quarkus.hibernate-orm.log.sql=true
+############################################
+# REDIS DEVSERVICES DISABILITATI
+############################################
+quarkus.redis.devservices.enabled=false
 
+############################################
+# HTTP / LOGGING
+############################################
 quarkus.http.test-port=0
 quarkus.http.cors=false
+quarkus.log.level=INFO
 """
-
 
 def gen_constants_dg(pkg, sn):
     short = to_short(sn)
-    topic_in  = f"{short}-in"
-    topic_out = f"{short}-out"
-    topic_in_const  = f"{short.upper()}_IN_TOPIC"
-    topic_out_const = f"{short.upper()}_OUT_TOPIC"
+    topic_in_const  = f"{short.upper()}_FLUSSI_TOPIC"
+    topic_out_const = f"{short.upper()}_BATCH_TOPIC"
+    topic_in_val    = f"{short}-FLUSSI"
+    topic_out_val   = f"{short}-BATCH"
     return f"""\
 package {pkg}.utils;
 
@@ -2530,51 +2779,67 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-public interface Constants {{
+public final class Constants {{
 
-    String TIMESTAMP_FORMAT = "yyyyMMddHHmmssSSS";
-    String MSG_ERROR = "Error";
+    private Constants() {{}}
 
-    interface Headers {{
-        String TRANSACTION_ID = "transactionId";
-        String KEYLOGIC       = "keyLogic";
-        String MOD_ASYNC      = "modAsync";
-        String PROCESS_TYPE   = "processType";
-        String JWT            = "JWT";
-        String AUTHORIZATION  = "Authorization";
-        String FLOW           = "FLOW";
+    public static final String TIMESTAMP_FORMAT = "yyyyMMddHHmmssSSS";
+    public static final String MSG_ERROR = "Error";
+
+    public static final class Headers {{
+        private Headers() {{}}
+        public static final String TRANSACTION_ID = "TRANSACTION-ID";
+        public static final String KEYLOGIC       = "KEY-LOGIC";
+        public static final String MOD_ASYNC      = "MOD-ASYNC";
+        public static final String PROCESS_TYPE   = "PROCESS-TYPE";
+        public static final String MESSAGE_KEY    = "MESSAGE-KEY";
+        public static final String CONTENT_TYPE   = "content-type";
+        public static final String JWT            = "JWT";
+        public static final String AUTHORIZATION  = "Authorization";
     }}
 
-    interface LogParams {{
-        String TN = "TN";
-        String KL = "KL";
-        String API = "API";
-        String MK = "MK";
-        String PT = "PT";
-        String MA = "MA";
+    public static final class KafkaHeaders {{
+        private KafkaHeaders() {{}}
+        public static final String TRANSACTION_ID = "TRANSACTION-ID";
+        public static final String KEYLOGIC       = "KEY-LOGIC";
+        public static final String PROCESS_TYPE   = "PROCESS-TYPE";
+        public static final String FLOW_TYPE      = "FLOW";
+        public static final String MESSAGE_KEY    = "MESSAGE-KEY";
+        public static final String CONTENT_TYPE   = "content-type";
     }}
 
-    interface MEDIATYPE {{
-        String APP_JSON = "application/json";
+    public static final class LogParams {{
+        private LogParams() {{}}
+        public static final String TN = "TN";
+        public static final String KL = "KL";
+        public static final String API = "API";
+        public static final String MK = "MK";
+        public static final String PT = "PT";
     }}
 
-    interface Topic {{
-        String {topic_in_const}  = "{topic_in}";
-        String {topic_out_const} = "{topic_out}";
+    public static final class MEDIATYPE {{
+        private MEDIATYPE() {{}}
+        public static final String APP_JSON = "application/json";
+    }}
 
-        static List<String> getAllTopicsValue() throws IllegalArgumentException, IllegalAccessException {{
+    public static final class Topic {{
+        private Topic() {{}}
+        public static final String {topic_in_const}  = "{topic_in_val}";
+        public static final String {topic_out_const} = "{topic_out_val}";
+
+        public static List<String> getAllTopicsValue() throws IllegalAccessException {{
             List<Field> fields = Arrays.asList(Constants.Topic.class.getDeclaredFields());
             List<String> topics = new ArrayList<>();
             for (Field field : fields) {{
-                Object object = field.get(null);
-                if (object instanceof String) topics.add((String) object);
+                if (field.getType() == String.class) {{
+                    topics.add((String) field.get(null));
+                }}
             }}
             return topics;
         }}
     }}
 }}
 """
-
 
 def gen_domain_entity(pkg, sn):
     cls = to_class_prefix(sn)
@@ -3261,12 +3526,15 @@ public class {cls}Resource {{
 
 
 def gen_kafka_consumer_dg(pkg, sn):
-    cls = to_class_prefix(sn)
+    cls   = to_class_prefix(sn)
     short = to_short(sn)
+    topic_in_const  = f"{short.upper()}_FLUSSI_TOPIC"
+    topic_out_const = f"{short.upper()}_BATCH_TOPIC"
     return f"""\
 package {pkg}.kafka;
 
 import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.CompletionStage;
 import java.util.function.BiConsumer;
@@ -3281,6 +3549,7 @@ import org.jboss.logging.Logger;
 import org.jboss.logging.MDC;
 
 import io.smallrye.common.annotation.Blocking;
+import io.smallrye.common.annotation.RunOnVirtualThread;
 import io.smallrye.reactive.messaging.kafka.api.IncomingKafkaRecordMetadata;
 import {pkg}.service.{cls}Service;
 import {pkg}.service.TopicService;
@@ -3294,6 +3563,7 @@ import jakarta.inject.Inject;
 public class KafkaGenericConsumer {{
 
     private static final Logger LOG = Logger.getLogger(KafkaGenericConsumer.class);
+    private static final int MAX_PAYLOAD_BYTES = 1_000_000;
 
     @Inject
     TopicService topicService;
@@ -3301,34 +3571,53 @@ public class KafkaGenericConsumer {{
     @Inject
     {cls}Service {short}Service;
 
-    private Map<String, BiConsumer<String, Headers>> handlers;
+    private Map<String, BiConsumer<byte[], Headers>> handlersOne;
+    private Map<String, BiConsumer<byte[], Headers>> handlersTwo;
 
     @PostConstruct
     void init() {{
-        handlers = Map.of(
-            topicService.getRealTopic(Topic.{short.upper()}_IN_TOPIC), this::handleSampleIn
-        );
-        handlers.keySet().forEach(t -> LOG.infof("Kafka handler registered for topic: %s", t));
+        handlersOne = new HashMap<>();
+        handlersOne.put(topicService.getRealTopic(Topic.{topic_in_const}), this::handleMessageMonitoraggioFlussi);
+        handlersOne.keySet().forEach(t -> LOG.infof("Kafka handler (monitor-flussi-in) registered for topic: %s", t));
+
+        handlersTwo = new HashMap<>();
+        handlersTwo.put(topicService.getRealTopic(Topic.{topic_out_const}), this::handleMessageMonitoraggioBatch);
+        handlersTwo.keySet().forEach(t -> LOG.infof("Kafka handler (monitor-batch-in) registered for topic: %s", t));
     }}
 
-    @Incoming("sample-in")
+    @Incoming("monitor-flussi-in")
     @Acknowledgment(Acknowledgment.Strategy.MANUAL)
     @Blocking
-    public CompletionStage<Void> consumeSampleIn(Message<String> message) {{
-        return consumeMessage(message);
+    public CompletionStage<Void> consumeOne(Message<byte[]> message) {{
+        return consumeMessage(message, handlersOne);
     }}
 
-    private CompletionStage<Void> consumeMessage(Message<String> message) {{
+    @Incoming("monitor-batch-in")
+    @Acknowledgment(Acknowledgment.Strategy.MANUAL)
+    @RunOnVirtualThread
+    public CompletionStage<Void> consumeTwo(Message<byte[]> message) {{
+        return consumeMessage(message, handlersTwo);
+    }}
+
+    private CompletionStage<Void> consumeMessage(Message<byte[]> message,
+            Map<String, BiConsumer<byte[], Headers>> handlersMap) {{
         try {{
             IncomingKafkaRecordMetadata<?, ?> metadata = message.getMetadata(IncomingKafkaRecordMetadata.class).orElse(null);
             String topic = metadata != null ? metadata.getTopic() : "unknown";
             Headers headers = metadata != null ? metadata.getHeaders() : new RecordHeaders();
-            String payload = message.getPayload();
-            MDC.put(Constants.LogParams.TN, extractHeader(headers, "TRANSACTION-ID"));
-            MDC.put(Constants.LogParams.KL, extractHeader(headers, "KEY-LOGIC"));
-            MDC.put(Constants.LogParams.PT, extractHeader(headers, "PROCESS-TYPE"));
-            MDC.put(Constants.LogParams.MK, extractHeader(headers, "MESSAGE-KEY"));
-            handlers.getOrDefault(topic, this::handleGeneric).accept(payload, headers);
+            byte[] payloadBytes = message.getPayload();
+
+            MDC.put(Constants.LogParams.TN, extractHeader(headers, Constants.KafkaHeaders.TRANSACTION_ID));
+            MDC.put(Constants.LogParams.KL, extractHeader(headers, Constants.KafkaHeaders.KEYLOGIC));
+            MDC.put(Constants.LogParams.PT, extractHeader(headers, Constants.KafkaHeaders.PROCESS_TYPE));
+            MDC.put(Constants.LogParams.MK, extractHeader(headers, Constants.KafkaHeaders.MESSAGE_KEY));
+
+            if (payloadBytes == null || payloadBytes.length > MAX_PAYLOAD_BYTES) {{
+                LOG.errorf("Payload null o troppo grande (%d bytes), skip", payloadBytes == null ? 0 : payloadBytes.length);
+                return message.ack();
+            }}
+
+            handlersMap.getOrDefault(topic, this::handleGeneric).accept(payloadBytes, headers);
             return message.ack();
         }} catch (Exception e) {{
             LOG.error("Error processing Kafka message", e);
@@ -3338,21 +3627,27 @@ public class KafkaGenericConsumer {{
         }}
     }}
 
-    private void handleSampleIn(String payload, Headers headers) {{
-        LOG.infof("handleSampleIn: processing payload...");
-        String flow = extractHeader(headers, "FLOW");
+    private void handleMessageMonitoraggioFlussi(byte[] payloadBytes, Headers headers) {{
+        String payload = new String(payloadBytes, StandardCharsets.UTF_8);
+        LOG.infof("handleMessageMonitoraggioFlussi: processing payload length=%d", payloadBytes.length);
+        String flow = extractHeader(headers, Constants.KafkaHeaders.FLOW_TYPE);
         if (flow != null && !flow.isBlank()) {{
             switch (flow) {{
                 case "SAVE":
                     {short}Service.processSaveFromKafka(payload);
                     break;
                 default:
-                    LOG.warnf("Unknown flow '%s' in message headers, skipping", flow);
+                    LOG.warnf("Unknown flow '%s' in monitor-flussi-in, skipping", flow);
             }}
         }}
     }}
 
-    private void handleGeneric(String payload, Headers headers) {{
+    private void handleMessageMonitoraggioBatch(byte[] payloadBytes, Headers headers) {{
+        // TODO: implementare gestione messaggi monitor-batch-in
+        LOG.infof("handleMessageMonitoraggioBatch: TODO - payload length=%d", payloadBytes.length);
+    }}
+
+    private void handleGeneric(byte[] payloadBytes, Headers headers) {{
         LOG.warn("No specific handler found for topic, using generic handler");
     }}
 
@@ -3363,7 +3658,6 @@ public class KafkaGenericConsumer {{
     }}
 }}
 """
-
 
 def gen_dev_kafka_topic_initializer(pkg):
     return f"""\
@@ -3898,13 +4192,12 @@ def gen_lib_pom(lib_name, lib_group, lib_pkg):
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
         <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
-        <quarkus.platform.version>3.9.2</quarkus.platform.version>
+        <quarkus.platform.version>3.34.5</quarkus.platform.version>
         <compiler-plugin.version>3.13.0</compiler-plugin.version>
         <surefire.version>3.2.5</surefire.version>
         <jacoco.version>0.8.14</jacoco.version>
-        <mockito.version>5.14.2</mockito.version>
+        <mockito.version>5.21.0</mockito.version>
         <assertj.version>3.26.3</assertj.version>
-        <junit.version>5.10.3</junit.version>
         <lombok.version>1.18.30</lombok.version>
         <sonar.coverage.jacoco.xmlReportPaths>target/site/jacoco/jacoco.xml</sonar.coverage.jacoco.xmlReportPaths>
         <sonar.java.coveragePlugin>jacoco</sonar.java.coveragePlugin>
@@ -3926,7 +4219,6 @@ def gen_lib_pom(lib_name, lib_group, lib_pkg):
         <!-- Quarkus API (provided) -->
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-rest</artifactId><scope>provided</scope></dependency>
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-rest-client-jackson</artifactId><scope>provided</scope></dependency>
-        <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-redis-client</artifactId><scope>provided</scope></dependency>
 
         <!-- JWT -->
         <dependency><groupId>com.auth0</groupId><artifactId>java-jwt</artifactId><version>4.4.0</version></dependency>
@@ -3935,14 +4227,11 @@ def gen_lib_pom(lib_name, lib_group, lib_pkg):
         <dependency><groupId>com.fasterxml.jackson.core</groupId><artifactId>jackson-databind</artifactId></dependency>
         <dependency><groupId>com.fasterxml.jackson.datatype</groupId><artifactId>jackson-datatype-jsr310</artifactId></dependency>
 
-        <!-- DB pool -->
-        <dependency><groupId>com.zaxxer</groupId><artifactId>HikariCP</artifactId><version>7.0.2</version></dependency>
-
         <!-- Lombok -->
         <dependency><groupId>org.projectlombok</groupId><artifactId>lombok</artifactId><version>${{lombok.version}}</version><scope>provided</scope></dependency>
 
         <!-- Test -->
-        <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><version>${{junit.version}}</version><scope>test</scope></dependency>
+        <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><scope>test</scope></dependency>
         <dependency><groupId>org.mockito</groupId><artifactId>mockito-core</artifactId><version>${{mockito.version}}</version><scope>test</scope></dependency>
         <dependency><groupId>org.mockito</groupId><artifactId>mockito-junit-jupiter</artifactId><version>${{mockito.version}}</version><scope>test</scope></dependency>
         <dependency><groupId>org.assertj</groupId><artifactId>assertj-core</artifactId><version>${{assertj.version}}</version><scope>test</scope></dependency>
@@ -3953,7 +4242,7 @@ def gen_lib_pom(lib_name, lib_group, lib_pkg):
             <plugin>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>${{compiler-plugin.version}}</version>
-                <configuration><release>${{java.version}}</release></configuration>
+                <configuration><source>${{java.version}}</source><target>${{java.version}}</target></configuration>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -4002,35 +4291,27 @@ def gen_lib_pom(lib_name, lib_group, lib_pkg):
 </project>
 """
 
-
 def gen_lib_application_properties():
     return """\
 ############################################
-# AUTHORIZATION REST CLIENT
+# SECURITY
 ############################################
-authorization-client/mp-rest/url=${AUTHZ_URL:http://localhost:8090/authorization}
-authorization-client/mp-rest/connectTimeout=2000
-authorization-client/mp-rest/readTimeout=3000
-
-############################################
-# REDIS (cache distribuita)
-############################################
-quarkus.redis.hosts=${REDIS_HOSTS:redis://localhost:6379}
-
-############################################
-# APP CACHE (Redis - custom)
-############################################
-app.cache.redis.prefix=${CACHE_REDIS_PREFIX:cache}
+security.enabled=${SECURITY_ENABLED:true}
+security.authz.bypass=${SECURITY_AUTHZ_BYPASS:false}
 
 ############################################
 # B2B TOKEN (HMAC-SHA256)
 ############################################
 security.b2b.secret=${B2B_SECRET:a3f8c2d91e4b7065f2a8c3d4e5f6071829a3b4c5d6e7f8091a2b3c4d5e6f7a8}
 security.b2b.token-ttl-seconds=${B2B_TOKEN_TTL:300}
-security.enabled=${SECURITY_ENABLED:true}
-security.authz.bypass=${SECURITY_AUTHZ_BYPASS:false}
-"""
 
+############################################
+# AUTHORIZATION REST CLIENT
+############################################
+authorization-client/mp-rest/url=${AUTHZ_URL:http://localhost:8090/authorization}
+authorization-client/mp-rest/connectTimeout=2000
+authorization-client/mp-rest/readTimeout=3000
+"""
 
 def gen_lib_application_test_properties():
     return """\
@@ -5379,7 +5660,7 @@ dependencies:
     artifactId: {lib_artifact}
     version: 1.0.0-SNAPSHOT
   quarkus-platform:
-    version: 3.9.2
+    version: 3.34.5
   java: "21"
 {db_section}
 kafka:
@@ -5500,7 +5781,7 @@ quarkus.rest-client.{sn}-dg-client.url=${{DG_URL:http://localhost:8081}}
 | Libreria | Coordinata |
 |---|---|
 | Common Library | `{lib_group}:{lib_artifact}:1.0.0-SNAPSHOT` |
-| Quarkus BOM | `io.quarkus.platform:quarkus-bom:3.9.2` |
+| Quarkus BOM | `io.quarkus.platform:quarkus-bom:3.34.5` |
 | Java | `21` |
 {f'| MSSQL + JPA Panache | `quarkus-hibernate-orm-panache` |{chr(10)}| Flyway | `quarkus-flyway` |{chr(10)}| Hibernate Envers | audit storico |{chr(10)}| Quarkus Scheduler + ShedLock | job schedulati |' if svc_type == 'datagateway' else '| MapStruct | generazione mapper |'}
 
@@ -5603,7 +5884,6 @@ def scaffold_library(lib_name: str, lib_pkg: str, output_dir: str) -> None:
     write(java / "filter"       / "B2BTokenFilter.java",    gen_lib_b2b_token_filter(lib_pkg))
     write(java / "util"         / "AuthorizationUtils.java", gen_lib_authorization_utils(lib_pkg))
     write(java / "util"         / "B2BTokenUtils.java",     gen_lib_b2b_token_utils(lib_pkg))
-    write(java / "util"         / "CacheUtils.java",        gen_lib_cache_utils(lib_pkg))
     write(java / "util"         / "JsonUtils.java",         gen_json_utils(f"{lib_pkg}.util"))
     write(java / "interceptor"  / "LogPmrInterceptor.java", gen_lib_log_pmr_interceptor(lib_pkg))
     write(java / "resolver"     / "MinimalContextResolver.java", gen_lib_minimal_context_resolver(lib_pkg))
@@ -5642,11 +5922,11 @@ def scaffold_service_dg(sn: str, pkg: str, output_dir: str,
     write(java / "filter"    / "MdcHeadersFilter.java",           gen_mdc_filter_dg(pkg))
     write(java / "filter"    / "GlobalHeadersOpenApiFilter.java",  gen_global_openapi_filter(pkg))
 
-    write(java / "config"    / "ApplicationConfig.java",          gen_application_config(pkg))
-    write(java / "config"    / "OpenApiConfig.java",              gen_openapi_config(pkg, sn))
+    write(java / "config"    / "ApplicationConfig.java",          gen_application_config_dg(pkg))
+    write(java / "config"    / "OpenApiConfig.java",              gen_openapi_config_dg(pkg, sn))
     write(java / "config"    / "RestApplication.java",            gen_rest_application(pkg))
 
-    write(java / "health"    / "ApplicationHealthCheck.java",     gen_health_check(pkg))
+    write(java / "health"    / "ApplicationHealthCheck.java",     gen_health_check_dg(pkg))
 
     write(java / "kafka"     / "KafkaGenericProducer.java",       gen_kafka_producer_dg(pkg, lib_pkg))
     write(java / "kafka"     / "KafkaGenericConsumer.java",       gen_kafka_consumer_dg(pkg, sn))
@@ -5720,7 +6000,7 @@ def scaffold_service(sn: str, pkg: str, output_dir: str,
     write(java / "health"   / "ApplicationHealthCheck.java",   gen_health_check(pkg))
 
     write(java / "kafka"    / "KafkaGenericProducer.java",     gen_kafka_producer(pkg, lib_pkg))
-    write(java / "kafka"    / "KafkaGenericConsumer.java",     gen_kafka_consumer(pkg))
+    write(java / "kafka"    / "KafkaGenericConsumer.java",     gen_kafka_consumer(pkg, sn))
     write(java / "kafka"    / "DevKafkaTopicInitializer.java", gen_dev_kafka_topic_initializer(pkg))
 
     write(java / "service"  / "AbstractService.java",          gen_abstract_service(pkg))
