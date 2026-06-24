@@ -146,6 +146,11 @@ def gen_pom(sn, pkg, lib_group, lib_artifact):
             <groupId>org.projectlombok</groupId><artifactId>lombok</artifactId>
             <version>${{lombok.version}}</version><scope>provided</scope>
         </dependency>
+        <!-- OIDC CLIENT (per DynamicAuthorizationHeaderFilter M2M) -->
+        <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-rest-client-oidc-filter</artifactId></dependency>
+        <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-oidc-client</artifactId></dependency>
+        <!-- COMMONS -->
+        <dependency><groupId>org.apache.commons</groupId><artifactId>commons-lang3</artifactId></dependency>
         <!-- FAULT TOLERANCE -->
         <dependency><groupId>io.quarkus</groupId><artifactId>quarkus-smallrye-fault-tolerance</artifactId></dependency>
         <!-- TEST -->
@@ -201,9 +206,12 @@ def gen_application_properties(sn, pkg, lib_pkg, short=None):
 ############################################
 quarkus.application.name={sn}
 mp.env=${{KAPP:2767-d}}
-quarkus.http.root-path=/${{mp.env}}
+quarkus.http.root-path=/
 quarkus.http.port=${{QUARKUS_PORT:8090}}
 quarkus.package.output-name={sn}
+quarkus.index-dependency.{sn}.group-id={pkg}
+quarkus.index-dependency.{sn}.artifact-id={sn}
+quarkus.micrometer.enabled=false
 
 ############################################
 # LOGGING - GLOBAL
@@ -225,6 +233,7 @@ quarkus.log.category."{lib_pkg}.interceptor".level=INFO
 ############################################
 quarkus.redis.hosts=${{REDIS_SSL:redis://}}${{REDIS_HOSTS:localhost}}:${{REDIS_PORT:6379}}
 quarkus.redis.password=${{REDIS_PASSWORD}}
+quarkus.micrometer.binder.redis.enabled=false
 ############################################
 # APP CACHE (Redis - custom)
 ############################################
@@ -270,6 +279,34 @@ mp.messaging.outgoing.kafka-out.linger.ms=5
 mp.messaging.outgoing.kafka-out.buffer.memory=8388608
 
 ############################################
+# APP KAFKA PAYLOAD LIMITS
+app.kafka.max-payload-bytes=1000000
+app.kafka.max-payload-fetch-bytes=${{app.kafka.max-payload-bytes}}
+app.kafka.skip-message=${{SKIP_MESSAGE:false}}
+
+# GLOBAL DLQ CONSUMER
+mp.messaging.incoming.global-dlq-in.connector=smallrye-kafka
+mp.messaging.incoming.global-dlq-in.bootstrap.servers=${{kafka.bootstrap.servers}}
+mp.messaging.incoming.global-dlq-in.topic=${{kafka-prefix.topics}}-globaldlq
+mp.messaging.incoming.global-dlq-in.group.id=groupId-{sn}-${{mp.env}}-DLQ
+mp.messaging.incoming.global-dlq-in.auto.offset.reset=earliest
+mp.messaging.incoming.global-dlq-in.value.deserializer=org.apache.kafka.common.serialization.ByteArrayDeserializer
+mp.messaging.incoming.global-dlq-in.key.deserializer=org.apache.kafka.common.serialization.StringDeserializer
+mp.messaging.incoming.global-dlq-in.enable.auto.commit=false
+mp.messaging.incoming.global-dlq-in.max.poll.records=1
+mp.messaging.incoming.global-dlq-in.fetch.max.bytes=${{app.kafka.max-payload-fetch-bytes}}
+mp.messaging.incoming.global-dlq-in.max.partition.fetch.bytes=${{app.kafka.max-payload-fetch-bytes}}
+mp.messaging.incoming.global-dlq-in.session.timeout.ms=15000
+mp.messaging.incoming.global-dlq-in.max.poll.interval.ms=300000
+mp.messaging.incoming.global-dlq-in.max-queue-size-factor=1
+mp.messaging.incoming.global-dlq-in.max-inflight-messages=1
+mp.messaging.incoming.global-dlq-in.security.protocol=SASL_SSL
+mp.messaging.incoming.global-dlq-in.sasl.mechanism=PLAIN
+mp.messaging.incoming.global-dlq-in.sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="${{KAFKA_API_KEY}}" password="${{KAFKA_API_SECRET}}";
+mp.messaging.incoming.global-dlq-in.connections.max.idle.ms=180000
+mp.messaging.incoming.global-dlq-in.socket.keepalive.enable=true
+
+############################################
 # GENERIC KAFKA CONSUMER (STRING)
 ############################################
 mp.messaging.incoming.anagrafica-flussi-in.connector=smallrye-kafka
@@ -288,8 +325,8 @@ mp.messaging.incoming.anagrafica-flussi-in.enable.auto.commit=false
 
 #  Performance / stabilità
 mp.messaging.incoming.anagrafica-flussi-in.max.poll.records=1
-mp.messaging.incoming.anagrafica-flussi-in.fetch.max.bytes=262144
-mp.messaging.incoming.anagrafica-flussi-in.max.partition.fetch.bytes=262144
+mp.messaging.incoming.anagrafica-flussi-in.fetch.max.bytes=${{app.kafka.max-payload-fetch-bytes}}
+mp.messaging.incoming.anagrafica-flussi-in.max.partition.fetch.bytes=${{app.kafka.max-payload-fetch-bytes}}
 mp.messaging.incoming.anagrafica-flussi-in.session.timeout.ms=15000
 mp.messaging.incoming.anagrafica-flussi-in.max.poll.interval.ms=300000
 
@@ -304,6 +341,12 @@ mp.messaging.incoming.anagrafica-flussi-in.topic=${{kafka-prefix.topics}}-{short
 mp.messaging.incoming.anagrafica-flussi-in.security.protocol=SASL_SSL
 mp.messaging.incoming.anagrafica-flussi-in.sasl.mechanism=PLAIN
 mp.messaging.incoming.anagrafica-flussi-in.sasl.jaas.config=org.apache.kafka.common.security.plain.PlainLoginModule required username="${{KAFKA_API_KEY}}" password="${{KAFKA_API_SECRET}}";
+mp.messaging.incoming.anagrafica-flussi-in.failure-strategy=dead-letter-queue
+mp.messaging.incoming.anagrafica-flussi-in.dead-letter-queue.topic=${{kafka-prefix.topics}}-globaldlq
+mp.messaging.incoming.anagrafica-flussi-in.dead-letter-queue.key.serializer=org.apache.kafka.common.serialization.StringSerializer
+mp.messaging.incoming.anagrafica-flussi-in.dead-letter-queue.value.serializer=org.apache.kafka.common.serialization.ByteArraySerializer
+mp.messaging.incoming.anagrafica-flussi-in.connections.max.idle.ms=180000
+mp.messaging.incoming.anagrafica-flussi-in.socket.keepalive.enable=true
 
 
 ############################################
@@ -361,6 +404,7 @@ quarkus.index-dependency.pmr-common.artifact-id=pmr-common-library
 %dev.kafka.security.protocol=PLAINTEXT
 %dev.kafka.topics.auto-create=true
 %dev.mp.messaging.outgoing.kafka-out.security.protocol=PLAINTEXT
+%dev.mp.messaging.incoming.global-dlq-in.security.protocol=PLAINTEXT
 %dev.mp.messaging.incoming.anagrafica-flussi-in.security.protocol=PLAINTEXT
 
 %dev.quarkus.redis.hosts=redis://localhost:6379
@@ -602,6 +646,16 @@ public class Utility {{
         return withCommonHeaders(Response.ok(gr)).build();
     }}
 
+    public <T> Response inCarico(T data) {{
+        String path = currentPath();
+        GenericResponse<T> gr = baseGeneric(path);
+        gr.setData(data);
+        gr.setExecutionTime(executionTime());
+        gr.setStatus(ResponseStatus.PRESO_IN_CARICO.toString());
+        if (data instanceof List<?> l) gr.setNumberOfElements(l.size());
+        return withCommonHeaders(Response.ok(gr)).build();
+    }}
+
     public <T> Response okWithMessageCustom(T data, Message msg) {{
         String path = currentPath();
         GenericResponse<T> gr = baseGeneric(path);
@@ -772,62 +826,362 @@ def gen_request_headers_context(pkg):
     return f"""\
 package {pkg}.filter;
 
-import jakarta.enterprise.context.RequestScoped;
+import java.io.Serializable;
 
-@RequestScoped
+import jakarta.enterprise.context.ApplicationScoped;
+
+@ApplicationScoped
 public class RequestHeadersContext {{
 
-    private String keyLogic;
-    private String transactionId;
-    private boolean modAsync;
-    private String processType;
-    private String path;
-    private long startNanos;
+    private static final InheritableThreadLocal<State> CTX = new InheritableThreadLocal<>() {{
+        @Override
+        protected State initialValue() {{
+            return new State();
+        }}
 
-    public String getKeyLogic() {{ return keyLogic; }}
-    public void setKeyLogic(String keyLogic) {{ this.keyLogic = keyLogic; }}
+        @Override
+        protected State childValue(State parentValue) {{
+            return parentValue == null ? new State() : new State(parentValue);
+        }}
+    }};
 
-    public String getTransactionId() {{ return transactionId; }}
-    public void setTransactionId(String transactionId) {{ this.transactionId = transactionId; }}
+    private State state() {{
+        return CTX.get();
+    }}
 
-    public boolean isModAsync() {{ return modAsync; }}
-    public void setModAsync(boolean modAsync) {{ this.modAsync = modAsync; }}
+    public String getKeyLogic() {{ return state().keyLogic; }}
+    public void setKeyLogic(String keyLogic) {{ state().keyLogic = keyLogic; }}
 
-    public String getProcessType() {{ return processType; }}
-    public void setProcessType(String processType) {{ this.processType = processType; }}
+    public String getTransactionId() {{ return state().transactionId; }}
+    public void setTransactionId(String transactionId) {{ state().transactionId = transactionId; }}
 
-    public String getPath() {{ return path; }}
-    public void setPath(String path) {{ this.path = path; }}
+    public boolean isModAsync() {{ return state().modAsync; }}
+    public void setModAsync(boolean modAsync) {{ state().modAsync = modAsync; }}
 
-    public long getStartNanos() {{ return startNanos; }}
-    public void setStartNanos(long startNanos) {{ this.startNanos = startNanos; }}
+    public String getProcessType() {{ return state().processType; }}
+    public void setProcessType(String processType) {{ state().processType = processType; }}
+
+    public String getCorrelationId() {{ return state().correlationId; }}
+    public void setCorrelationId(String correlationId) {{ state().correlationId = correlationId; }}
+
+    public String getPath() {{ return state().path; }}
+    public void setPath(String path) {{ state().path = path; }}
+
+    public long getStartNanos() {{ return state().startNanos; }}
+    public void setStartNanos(long startNanos) {{ state().startNanos = startNanos; }}
+
+    public Snapshot snapshot() {{
+        State s = state();
+        return new Snapshot(
+                s.keyLogic, s.transactionId, s.modAsync, s.processType,
+                s.correlationId, s.path, s.startNanos
+        );
+    }}
+
+    public void restore(Snapshot snapshot) {{
+        if (snapshot == null) {{
+            clear();
+            return;
+        }}
+        State s = state();
+        s.keyLogic      = snapshot.keyLogic();
+        s.transactionId = snapshot.transactionId();
+        s.modAsync      = snapshot.modAsync();
+        s.processType   = snapshot.processType();
+        s.correlationId = snapshot.correlationId();
+        s.path          = snapshot.path();
+        s.startNanos    = snapshot.startNanos();
+    }}
+
+    public void clear() {{
+        CTX.remove();
+    }}
+
+    private static final class State {{
+        private String keyLogic;
+        private String transactionId;
+        private boolean modAsync;
+        private String processType;
+        private String correlationId;
+        private String path;
+        private long startNanos;
+
+        private State() {{}}
+
+        private State(State other) {{
+            this.keyLogic      = other.keyLogic;
+            this.transactionId = other.transactionId;
+            this.modAsync      = other.modAsync;
+            this.processType   = other.processType;
+            this.correlationId = other.correlationId;
+            this.path          = other.path;
+            this.startNanos    = other.startNanos;
+        }}
+    }}
+
+    public record Snapshot(
+            String keyLogic,
+            String transactionId,
+            boolean modAsync,
+            String processType,
+            String correlationId,
+            String path,
+            long startNanos
+    ) implements Serializable {{
+        private static final long serialVersionUID = 1L;
+    }}
 }}
 """
 
 
-def gen_rest_client_headers_filter(pkg):
+def gen_rest_client_headers_filter(pkg, lib_pkg):
     return f"""\
 package {pkg}.filter;
 
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+
+import org.apache.commons.lang3.StringUtils;
+
 import {pkg}.utils.Constants;
+import {lib_pkg}.util.B2BTokenUtils;
+import jakarta.annotation.Priority;
 import jakarta.inject.Inject;
+import jakarta.ws.rs.Priorities;
 import jakarta.ws.rs.client.ClientRequestContext;
 import jakarta.ws.rs.client.ClientRequestFilter;
+import jakarta.ws.rs.core.HttpHeaders;
 import jakarta.ws.rs.ext.Provider;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 
+@Slf4j
 @Provider
+@Priority(Priorities.AUTHENTICATION + 10)
+@RequiredArgsConstructor(onConstructor_ = @Inject)
 public class RestClientHeadersFilter implements ClientRequestFilter {{
 
-    @Inject
-    RequestHeadersContext ctx;
+    private static final String BEARER = "Bearer ";
+
+    private final B2BTokenUtils tokenUtil;
+    private final RequestHeadersContext ctx;
 
     @Override
     public void filter(ClientRequestContext requestContext) {{
-        requestContext.getHeaders().putSingle(Constants.Headers.KEYLOGIC,       ctx.getKeyLogic());
-        requestContext.getHeaders().putSingle(Constants.Headers.TRANSACTION_ID, ctx.getTransactionId());
-        requestContext.getHeaders().putSingle(Constants.Headers.MOD_ASYNC,      String.valueOf(ctx.isModAsync()));
-        requestContext.getHeaders().putSingle(Constants.Headers.PROCESS_TYPE,   ctx.getProcessType());
+        putIfNotNull(requestContext, Constants.Headers.KEYLOGIC,       safe(ctx.getKeyLogic()));
+        putIfNotNull(requestContext, Constants.Headers.TRANSACTION_ID, safe(ctx.getTransactionId()));
+        putIfNotNull(requestContext, Constants.Headers.PROCESS_TYPE,   safe(ctx.getProcessType()));
+        requestContext.getHeaders().putSingle(Constants.Headers.MOD_ASYNC, String.valueOf(ctx.isModAsync()));
+
+        if (hasAuthorization(requestContext)) {{
+            log.debug("JWT already present in request, skipping");
+            return;
+        }}
+
+        putAuthorization(requestContext, tokenUtil.generateSuperUserToken());
     }}
+
+    private void putIfNotNull(ClientRequestContext requestContext, String key, String value) {{
+        if (value != null) requestContext.getHeaders().putSingle(key, value);
+    }}
+
+    private String safe(String value) {{
+        return value != null && !value.isBlank() ? value : null;
+    }}
+
+    private boolean hasAuthorization(ClientRequestContext requestContext) {{
+        List<Object> values = requestContext.getHeaders().get(HttpHeaders.AUTHORIZATION);
+        return values != null && values.stream().filter(Objects::nonNull).map(Object::toString)
+                                       .anyMatch(StringUtils::isNotBlank);
+    }}
+
+    private void putAuthorization(ClientRequestContext requestContext, String token) {{
+        String normalized = Optional.ofNullable(token).filter(StringUtils::isNotBlank).map(String::trim)
+                .map(v -> v.startsWith(BEARER) ? v : BEARER + v)
+                .orElseThrow(() -> new IllegalStateException("Authorization token is blank"));
+        requestContext.getHeaders().putSingle(HttpHeaders.AUTHORIZATION, normalized);
+    }}
+}}
+"""
+
+
+def gen_auth_filter_helper(pkg):
+    return f"""\
+package {pkg}.utils;
+
+import java.lang.reflect.Method;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+
+import org.apache.commons.lang3.StringUtils;
+import org.eclipse.microprofile.config.ConfigProvider;
+import org.eclipse.microprofile.rest.client.inject.RegisterRestClient;
+
+import jakarta.ws.rs.client.ClientRequestContext;
+import jakarta.ws.rs.core.HttpHeaders;
+import lombok.experimental.UtilityClass;
+
+@UtilityClass
+public class AuthFilterHelper {{
+
+    private final String M2M = "M2M";
+    private final String JWT = "JWT";
+    private final String BEARER = "Bearer ";
+    private final String AUTH_MODE = ".auth-mode";
+    private final String INVOKED_METHOD = "org.eclipse.microprofile.rest.client.invokedMethod";
+
+    public String resolveConfigKey(ClientRequestContext requestContext) {{
+        Method method = Optional.ofNullable(requestContext.getProperty(INVOKED_METHOD))
+                                .filter(Method.class::isInstance).map(Method.class::cast)
+                                .orElseThrow(() -> new IllegalStateException("Unable to resolve invoked RestClient's method"));
+        return Optional.ofNullable(method.getDeclaringClass().getAnnotation(RegisterRestClient.class))
+                       .map(RegisterRestClient::configKey).filter(StringUtils::isNotBlank)
+                       .orElseThrow(() -> new IllegalStateException("Unable to resolve RestClient's configKey from: " + method.getDeclaringClass().getName()));
+    }}
+
+    public String resolveAuthMode(String configKey) {{
+        String authModeKey = configKey + AUTH_MODE;
+        return ConfigProvider.getConfig().getOptionalValue(authModeKey, String.class).orElse(JWT);
+    }}
+
+    public boolean isAuthModeM2M(String authMode) {{
+        return M2M.equalsIgnoreCase(authMode);
+    }}
+
+    public String normalizeBearer(String auth) {{
+        return Optional.ofNullable(auth).filter(StringUtils::isNotBlank).map(String::trim)
+                       .map(value -> value.startsWith(BEARER) ? value : BEARER + value)
+                       .orElseThrow(() -> new IllegalStateException("Authorization token is blank"));
+    }}
+
+    public boolean hasAuthorization(ClientRequestContext requestContext) {{
+        List<Object> values = requestContext.getHeaders().get(HttpHeaders.AUTHORIZATION);
+        return values != null && values.stream().filter(Objects::nonNull).map(Object::toString)
+                                       .anyMatch(StringUtils::isNotBlank);
+    }}
+}}
+"""
+
+
+def gen_dynamic_authorization_header_filter(pkg, lib_pkg):
+    return f"""\
+package {pkg}.filter;
+
+import java.time.Duration;
+
+import org.apache.commons.lang3.StringUtils;
+
+import {pkg}.utils.AuthFilterHelper;
+import {lib_pkg}.util.B2BTokenUtils;
+import io.quarkus.oidc.client.OidcClient;
+import io.quarkus.oidc.client.OidcClients;
+import io.quarkus.oidc.client.Tokens;
+import jakarta.annotation.Priority;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import jakarta.ws.rs.Priorities;
+import jakarta.ws.rs.ServiceUnavailableException;
+import jakarta.ws.rs.client.ClientRequestContext;
+import jakarta.ws.rs.client.ClientRequestFilter;
+import jakarta.ws.rs.core.HttpHeaders;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+@ApplicationScoped
+@Priority(Priorities.AUTHENTICATION)
+@RequiredArgsConstructor(onConstructor_ = @Inject)
+public class DynamicAuthorizationHeaderFilter implements ClientRequestFilter {{
+
+    private static final Duration TOKEN_TIMEOUT = Duration.ofSeconds(5);
+
+    private final OidcClients oidcClients;
+    private final B2BTokenUtils b2bTokenUtils;
+
+    @Override
+    public void filter(ClientRequestContext requestContext) {{
+        String configKey = AuthFilterHelper.resolveConfigKey(requestContext);
+        String authMode  = AuthFilterHelper.resolveAuthMode(configKey);
+
+        if (AuthFilterHelper.isAuthModeM2M(authMode)) {{
+            log.debug("M2M mode for configKey: {{}}", configKey);
+            putAuthorization(requestContext, fetchAuthTokenM2M(configKey));
+            return;
+        }}
+
+        if (AuthFilterHelper.hasAuthorization(requestContext)) {{
+            log.debug("JWT already present in request");
+            return;
+        }}
+
+        putAuthorization(requestContext, fetchAuthTokenB2B());
+    }}
+
+    private String fetchAuthTokenM2M(String configKey) {{
+        try {{
+            OidcClient oidcClient = oidcClients.getClient(configKey);
+            Tokens tokens = oidcClient.getTokens().await().atMost(TOKEN_TIMEOUT);
+            return tokens.getAccessToken();
+        }} catch (Exception ex) {{
+            log.error("Unable to acquire M2M token for configKey: {{}}", configKey, ex);
+            throw new ServiceUnavailableException("Unable to acquire M2M token for configKey: " + configKey);
+        }}
+    }}
+
+    private String fetchAuthTokenB2B() {{
+        log.debug("Generating B2B SuperUser token");
+        return b2bTokenUtils.generateSuperUserToken();
+    }}
+
+    private void putAuthorization(ClientRequestContext requestContext, String token) {{
+        String normalized = AuthFilterHelper.normalizeBearer(token);
+        requestContext.getHeaders().putSingle(HttpHeaders.AUTHORIZATION, normalized);
+    }}
+}}
+"""
+
+
+def gen_kafka_consumer_runtime_config(pkg):
+    return f"""\
+package {pkg}.config;
+
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+
+import jakarta.enterprise.context.ApplicationScoped;
+
+@ApplicationScoped
+public class KafkaConsumerRuntimeConfig {{
+
+    @ConfigProperty(name = "app.kafka.skip-message", defaultValue = "false")
+    boolean skipMessage;
+
+    public boolean isSkipMessage() {{
+        return skipMessage;
+    }}
+}}
+"""
+
+
+def gen_controlled_dlq_exception(pkg):
+    return f"""\
+package {pkg}.exception;
+
+public class ControlledDlqException extends RuntimeException {{
+
+    private static final long serialVersionUID = 1L;
+    private final String code;
+    private final String transactionId;
+
+    public ControlledDlqException(String code, String transactionId, String message) {{
+        super(message, null, false, false);
+        this.code = code;
+        this.transactionId = transactionId;
+    }}
+
+    public String getCode() {{ return code; }}
+    public String getTransactionId() {{ return transactionId; }}
 }}
 """
 
@@ -1064,7 +1418,7 @@ public class MdcHeadersFilter implements ContainerRequestFilter, ContainerRespon
             resp.getHeaders().putSingle(Constants.Headers.TRANSACTION_ID, tid);
             resp.getHeaders().putSingle(Constants.Headers.MOD_ASYNC,      String.valueOf(ma));
             resp.getHeaders().putSingle(Constants.Headers.PROCESS_TYPE,   pt);
-        }} finally {{ MDC.clear(); }}
+        }} finally {{ MDC.clear(); requestHeadersContext.clear(); }}
     }}
 
     private static void putIfBlank(MultivaluedMap<String, String> h, String name, String value) {{
@@ -1736,7 +2090,7 @@ import org.eclipse.microprofile.reactive.messaging.Message;
 import org.jboss.logging.Logger;
 import org.jboss.logging.MDC;
 
-import io.smallrye.common.annotation.Blocking;
+import io.smallrye.common.annotation.RunOnVirtualThread;
 import io.smallrye.reactive.messaging.kafka.api.IncomingKafkaRecordMetadata;
 import {pkg}.service.TopicService;
 import {pkg}.utils.Constants;
@@ -1765,7 +2119,7 @@ public class KafkaGenericConsumer {{
 
     @Incoming("anagrafica-flussi-in")
     @Acknowledgment(Acknowledgment.Strategy.MANUAL)
-    @Blocking
+    @RunOnVirtualThread
     public CompletionStage<Void> consumeOne(Message<byte[]> message) {{
         try {{
             IncomingKafkaRecordMetadata<?, ?> metadata = message.getMetadata(IncomingKafkaRecordMetadata.class).orElse(null);
@@ -5980,9 +6334,11 @@ def scaffold_service(sn: str, pkg: str, output_dir: str,
     write(java / "utils"    / "RequestCtx.java",               gen_request_ctx(pkg))
     write(java / "utils"    / "Utility.java",                  gen_utility(pkg))
     write(java / "utils"    / "MessageTypeEnum.java",          gen_message_type_enum(pkg))
+    write(java / "utils"    / "AuthFilterHelper.java",         gen_auth_filter_helper(pkg))
 
     write(java / "exception"/ "RemoteCallException.java",      gen_remote_call_exception(pkg))
     write(java / "exception"/ "RetryableRemoteException.java", gen_retryable_remote_exception(pkg))
+    write(java / "exception"/ "ControlledDlqException.java",   gen_controlled_dlq_exception(pkg))
 
     write(java / "response" / "GenericResponse.java",          gen_generic_response(pkg))
     write(java / "response" / "ResponseStatus.java",           gen_response_status(pkg))
@@ -5991,10 +6347,12 @@ def scaffold_service(sn: str, pkg: str, output_dir: str,
     write(java / "filter"   / "RequestHeadersContext.java",    gen_request_headers_context(pkg))
     write(java / "filter"   / "MdcHeadersFilter.java",         gen_mdc_filter(pkg))
     write(java / "filter"   / "GlobalHeadersOpenApiFilter.java",gen_global_openapi_filter(pkg))
-    write(java / "filter"   / "RestClientHeadersFilter.java",  gen_rest_client_headers_filter(pkg))
+    write(java / "filter"   / "RestClientHeadersFilter.java",  gen_rest_client_headers_filter(pkg, lib_pkg))
+    write(java / "filter"   / "DynamicAuthorizationHeaderFilter.java", gen_dynamic_authorization_header_filter(pkg, lib_pkg))
 
     write(java / "config"   / "ApplicationConfig.java",        gen_application_config(pkg))
     write(java / "config"   / "OpenApiConfig.java",            gen_openapi_config(pkg, sn))
+    write(java / "config"   / "KafkaConsumerRuntimeConfig.java", gen_kafka_consumer_runtime_config(pkg))
     write(java / "config"   / "RestApplication.java",          gen_rest_application(pkg))
 
     write(java / "health"   / "ApplicationHealthCheck.java",   gen_health_check(pkg))
